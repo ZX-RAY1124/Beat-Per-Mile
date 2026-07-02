@@ -17,6 +17,7 @@ struct Index {
         .onClick(() => {
           this.message = 'Welcome';
         })
+        .backgroundImagePosition(Alignment.Center)
     }
     .height('100%')
     .width('100%')
