@@ -13,7 +13,7 @@ struct Main {
   @State button_zoom_x: number = 1;
   @State button_zoom_y: number = 1;
   @State anim_ctr : boolean = false;
-  @State animator: Ellipse_animation = new Ellipse_animation(960,480);
+  @State animator: Ellipse_animation = new Ellipse_animation(100,50);
 
   build() {
     HdsNavDestination() {
@@ -25,8 +25,8 @@ struct Main {
 
 
         Column(){
-          Column().width(40).height(40).backgroundColor(Color.Orange).id("sc").animation({duration:1200, iterations:-1})
-            .offset({x:this.animator.x, y:this.animator.y})
+          Column().width(40).height(40).backgroundColor(Color.Orange).id("sc").animation({duration:1200})
+            .offset({x:this.animator.x, y:-this.animator.y + 50})
             .onClick(() =>{
               this.anim_ctr = !this.anim_ctr;
               this.anim_ctr ? this.animator.onPlay() : this.animator.onPause();

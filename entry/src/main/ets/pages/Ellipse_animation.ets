@@ -5,20 +5,24 @@ export class Ellipse_animation {
 
   constructor(a:number, b:number) {
     this.a = a; this.b = b;
-    this.x = 0; this.y = 0;
+    this.x = -a/2; this.y = -b;
   }
 
   onPlay(): void{
     this.play = true;
     let back:boolean = false;
-     setInterval(()=>{
-      if(this.x < this.a) {
-        this.y = Math.sqrt((1 - (Math.pow(this.x, 2) / Math.pow(this.a, 2))) * Math.pow(this.b, 2))
-        this.x += 0.01
-      } else {
-        this.x = - this.a;
-      }
-    },0.001)
+     setInterval(() =>{
+       if(this.play) {
+         if (this.x < this.a) {
+           this.y = Math.sqrt((1 - (Math.pow(this.x, 2) / Math.pow(this.a, 2))) * Math.pow(this.b, 2))
+           this.x += 1
+         } else {
+           this.x = -this.a;
+         }
+       } else {
+         clearInterval()
+       }
+    },0.01);
 
   }
 
