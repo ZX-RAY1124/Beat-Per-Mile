@@ -9,7 +9,6 @@ struct Index {
   @Provide NavPathStack: NavPathStack = new NavPathStack();
 
 
-
   aboutToAppear(): void {
     setTimeout(() => {
       this.NavPathStack.replacePathByName("MainPage",null,true)
@@ -49,7 +48,6 @@ struct Index {
     .hideTitleBar(true)
     .hideToolBar(true)
     .hideBackButton(true)
-
   }
 
   pageTransition() {
