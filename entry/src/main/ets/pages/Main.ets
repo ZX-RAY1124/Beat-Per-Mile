@@ -28,8 +28,7 @@ struct Main {
           Column().width(40).height(40).backgroundColor(Color.Orange).id("sc").animation({duration:1200})
             .offset({x:this.animator.x, y:-this.animator.y + 50})
             .onClick(() =>{
-              this.anim_ctr = !this.anim_ctr;
-              this.anim_ctr ? this.animator.onPlay() : this.animator.onPause();
+
             })
 
 
@@ -46,6 +45,9 @@ struct Main {
             this.button_y= this.is_button_animate ? 400 : -20;    //400
             this.button_zoom_x = this.is_button_animate ? 4 : 1
             this.button_zoom_y = this.is_button_animate ? 2 : 1
+
+            this.anim_ctr = !this.anim_ctr;
+            this.anim_ctr ? this.animator.onPlay() : this.animator.onPause();
 
           })
 

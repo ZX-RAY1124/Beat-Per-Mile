@@ -21,7 +21,7 @@ struct Index {
   build() {
     HdsNavigation(this.NavPathStack) {
       RelativeContainer() {
-        Image($r('app.media.sports_icon'))
+        Image(('')/*$r('app.media.sports_icon')*/)
           .id('sports_icon')
           .width(200)
           .height(200)
