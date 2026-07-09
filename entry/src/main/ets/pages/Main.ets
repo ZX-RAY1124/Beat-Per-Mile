@@ -26,7 +26,17 @@ struct Main {
 
 
           List({scroller:this.scroller}) {
+          /*
 
+          *    记得开头结尾修改为 (l + d) / 2
+          *    以后适配屏幕宽度
+          *    两个按钮之间的宽度同理
+          *
+           */
+
+            ListItem(){
+              Row().width(1000)
+            }
 
             ListItem() {
               Column() {
@@ -112,6 +122,10 @@ struct Main {
 
               })
             }
+            ListItem(){
+              Row().width(1000)
+            }
+
           }.listDirection(Axis.Horizontal)
           .alignSelf(ItemAlign.Baseline)
           .scrollBar(BarState.Off)
