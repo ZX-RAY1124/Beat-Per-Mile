@@ -1,19 +1,20 @@
 import { HdsNavDestination, HdsNavigation } from '@hms.hds.hdsBaseComponent';
-import { curves } from '@kit.ArkUI';
+import { Center_Button } from './Button';
 import { EllipseShape } from '@kit.ArkUI';
-import {Ellipse_animation} from './Ellipse_animation'
+import {Ellipse_animation} from './Ellipse_animation';
 
 @Preview
 @Component
 struct Main {
 
   @State navPathStack: NavPathStack = new NavPathStack();
-  @State is_button_animate : boolean = false;
-  @State button_y : number = -20;
-  @State button_zoom_x: number = 1;
-  @State button_zoom_y: number = 1;
-  @State anim_ctr : boolean = false;
-  @State animator: Ellipse_animation = new Ellipse_animation(100,50);
+  @State selected_id: number = 1;
+  private scroller: Scroller = new Scroller();      //创建Scroller
+
+
+  @State Button_1 : Center_Button = new Center_Button(1)
+  @State Button_2 : Center_Button = new Center_Button(2)
+
 
   build() {
     HdsNavDestination() {
@@ -21,42 +22,105 @@ struct Main {
         Text('主屏幕')
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
-          .offset({y:-100})
+          .offset({ y: -100 })
 
 
-        Column(){
-          Column().width(40).height(40).backgroundColor(Color.Orange).id("sc").animation({duration:1200})
-            .offset({x:this.animator.x, y:-this.animator.y + 50})
-            .onClick(() =>{
-
-            })
+          List({scroller:this.scroller}) {
 
 
-        }.backgroundColor(Color.Blue)
-        .clipShape(new EllipseShape({width:'100%', height:'100%'}))
-        .height(240)
-        .width(240)
-        .scale({x:this.button_zoom_x, y:this.button_zoom_y})
-        .offset({y: this.button_y})
-        .renderGroup(true)
-        .onClick(()=>{
-          this.getUIContext()?.animateTo({curve: Curve.EaseInOut, duration:500}, () => {
-            this.is_button_animate = !this.is_button_animate;
-            this.button_y= this.is_button_animate ? 400 : -20;    //400
-            this.button_zoom_x = this.is_button_animate ? 4 : 1
-            this.button_zoom_y = this.is_button_animate ? 2 : 1
+            ListItem() {
+              Column() {
+                Column()
+                  .width(40)
+                  .height(40)
+                  .backgroundColor(Color.Orange)
+                  .animation({ duration: 1200 })
+                  .offset({ x: this.Button_1.animator.x, y: -this.Button_1.animator.y + 50 })
+                  .onClick(() => {
 
-            this.anim_ctr = !this.anim_ctr;
-            this.anim_ctr ? this.animator.onPlay() : this.animator.onPause();
-
-          })
-
-        })
+                  })
 
 
+              }
+              .backgroundColor(Color.Blue)
+              .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+              .height(240)
+              .width(240)
+              .scale({ x: this.Button_1.button_zoom_x, y: this.Button_1.button_zoom_y })
+              .offset({ y: this.Button_1.offset_y })
+              .renderGroup(true)
+              .onClick(() => {
 
-      }
-      .width('100%')
+                this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
+                  this.selected_id = 1;
+
+
+
+                  if(this.Button_1.is_select) {
+                    this.Button_1.unselect();
+                    this.Button_2.unselect();
+                  } else {
+                    this.Button_1.select();
+                    this.Button_2.unselect();
+                  }
+
+
+                })
+
+
+              })
+            }.margin({right:20})
+            ListItem() {
+
+
+              Column() {
+                Column()
+                  .width(40)
+                  .height(40)
+                  .backgroundColor(Color.Orange)
+                  .animation({ duration: 1200 })
+                  .offset({ x: this.Button_2.animator.x, y: -this.Button_2.animator.y + 50 })
+                  .onClick(() => {
+
+                  })
+
+
+              }
+              .backgroundColor(Color.Green)
+              .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+              .height(240)
+              .width(240)
+              .scale({ x: this.Button_2.button_zoom_x, y: this.Button_2.button_zoom_y })
+              .offset({ y: this.Button_2.offset_y })
+              .renderGroup(true)
+              .onClick(() => {
+
+                this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
+                  this.selected_id = 2;
+
+                  if(this.Button_2.is_select) {
+                    this.Button_2.unselect();
+                    this.Button_1.unselect();
+                  } else {
+                    this.Button_2.select();
+                    this.Button_1.unselect();
+
+                  }
+
+                })
+
+
+              })
+            }
+          }.listDirection(Axis.Horizontal)
+          .alignSelf(ItemAlign.Baseline)
+          .scrollBar(BarState.Off)
+          .width(1000)
+          .margin({ top: 20 })
+        .width('100%')
+        .height('50%')
+
+      }.width('100%')
       .height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
