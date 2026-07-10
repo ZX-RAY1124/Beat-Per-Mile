@@ -1,7 +1,6 @@
 import { HdsNavDestination, HdsNavigation } from '@hms.hds.hdsBaseComponent';
 import { Center_Button } from './Button';
 import { EllipseShape } from '@kit.ArkUI';
-import {Ellipse_animation} from './Ellipse_animation';
 
 @Preview
 @Component
