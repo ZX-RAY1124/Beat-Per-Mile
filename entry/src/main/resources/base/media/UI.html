@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1320, initial-scale=1.0">
+<title>运动音乐 - 界面设计</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f0f2f5;
+    font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+  }
+
+  /* ── 手机外框 ── */
+  .phone {
+    width: 1320px;
+    height: 2856px;
+    background: #ffffff;
+    border-radius: 80px;
+    box-shadow:
+      0 0 0 12px #1a1a2e,
+      0 0 0 14px #2d2d44,
+      0 30px 80px rgba(0,0,0,.35);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 状态栏 ── */
+  .status-bar {
+    height: 80px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 48px;
+    font-size: 28px;
+    font-weight: 600;
+    color: #1a1a2e;
+    flex-shrink: 0;
+    margin-top: 12px;
+  }
+  .status-bar .time { font-weight: 700; }
+  .status-icons { display: flex; gap: 10px; align-items: center; }
+  .status-icons svg { display: block; }
+
+  /* ── 灵动岛 ── */
+  .dynamic-island {
+    width: 320px;
+    height: 58px;
+    background: #1a1a2e;
+    border-radius: 40px;
+    position: absolute;
+    top: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+  }
+
+  /* ── 内容区 ── */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 60px 48px 140px;
+    gap: 40px;
+    position: relative;
+  }
+
+  /* ========== 第一板块 ========== */
+  .section-1 {
+    flex-shrink: 0;
+  }
+
+  .section-1 .section-label {
+    font-size: 36px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 32px;
+    letter-spacing: 2px;
+  }
+
+  .card-row {
+    display: flex;
+    gap: 28px;
+  }
+
+  .stat-card {
+    flex: 1;
+    border-radius: 32px;
+    padding: 36px 24px;
+    background: #ffffff;
+    box-shadow: 0 8px 40px rgba(0,0,0,.07);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    transition: transform .25s ease;
+    min-height: 260px;
+  }
+  .stat-card:hover { transform: translateY(-4px); }
+
+  /* 每张卡片的彩色装饰条 */
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 6px;
+  }
+  .stat-card:nth-child(1)::before { background: linear-gradient(90deg, #FF6B6B, #FF8E53); }
+  .stat-card:nth-child(2)::before { background: linear-gradient(90deg, #4ECDC4, #44B6C6); }
+  .stat-card:nth-child(3)::before { background: linear-gradient(90deg, #A78BFA, #7C3AED); }
+
+  /* 小圆图标 */
+  .stat-card .icon-circle {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+  }
+  .stat-card:nth-child(1) .icon-circle { background: #FFF0ED; }
+  .stat-card:nth-child(2) .icon-circle { background: #EDFCF9; }
+  .stat-card:nth-child(3) .icon-circle { background: #F5F0FF; }
+
+  .stat-card .value {
+    font-size: 56px;
+    font-weight: 800;
+    color: #1a1a2e;
+    line-height: 1.1;
+  }
+  .stat-card .value .unit {
+    font-size: 26px;
+    font-weight: 500;
+    color: #888;
+    margin-left: 4px;
+  }
+  .stat-card .label {
+    font-size: 26px;
+    color: #888;
+    font-weight: 500;
+    margin-top: 6px;
+    letter-spacing: 2px;
+  }
+
+  /* ========== 第二板块 ========== */
+  .section-2 {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+  /* ── 圆形按钮 ── */
+  .main-btn {
+    width: 920px;
+    height: 920px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #FF6B6B 0%, #FF8E53 50%, #FFB347 100%);
+    box-shadow:
+      0 20px 80px rgba(255,107,107,.35),
+      inset 0 -8px 40px rgba(0,0,0,.08),
+      inset 0 8px 40px rgba(255,255,255,.25);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform .3s ease, box-shadow .3s ease;
+    position: relative;
+    margin-bottom: 40px;
+    flex-shrink: 0;
+  }
+  .main-btn:hover {
+    transform: scale(1.02);
+    box-shadow:
+      0 24px 90px rgba(255,107,107,.45),
+      inset 0 -8px 40px rgba(0,0,0,.08),
+      inset 0 8px 40px rgba(255,255,255,.25);
+  }
+
+  /* 装饰外环 */
+  .main-btn::before {
+    content: '';
+    position: absolute;
+    inset: -12px;
+    border-radius: 50%;
+    background: conic-gradient(
+      from 0deg,
+      transparent,
+      rgba(255,255,255,.15) 30deg,
+      transparent 60deg,
+      rgba(255,255,255,.15) 120deg,
+      transparent 180deg,
+      rgba(255,255,255,.15) 240deg,
+      transparent 300deg,
+      transparent 360deg
+    );
+    animation: spin 8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .main-btn .btn-icon {
+    position: relative;
+    z-index: 1;
+    margin-bottom: 16px;
+  }
+  .main-btn .btn-text {
+    position: relative;
+    z-index: 1;
+    font-size: 48px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 8px;
+    text-shadow: 0 4px 20px rgba(0,0,0,.15);
+  }
+  .main-btn .btn-sub {
+    position: relative;
+    z-index: 1;
+    font-size: 24px;
+    color: rgba(255,255,255,.75);
+    letter-spacing: 4px;
+    margin-top: 8px;
+  }
+
+  /* ── 胶囊 Tab 栏（吸底） ── */
+  .tab-bar {
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 100px;
+    padding: 14px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 920px;
+    flex-shrink: 0;
+    box-shadow:
+      0 8px 48px rgba(0,0,0,.08),
+      inset 0 1px 0 rgba(255,255,255,.6);
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+  }
+
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 8px 10px;
+    border-radius: 40px;
+    transition: background .2s ease;
+    position: relative;
+    min-width: 100px;
+  }
+  .tab-item:hover { background: rgba(255,107,107,.06); }
+  .tab-item.active { background: rgba(255,107,107,.10); }
+
+  .tab-item .tab-icon { display: flex; align-items: center; justify-content: center; }
+  .tab-item .tab-label {
+    font-size: 22px;
+    color: #555;
+    font-weight: 500;
+    transition: color .2s ease;
+  }
+  .tab-item.active .tab-label { color: #FF6B6B; font-weight: 600; }
+
+  /* 中间 tab 居中 */
+  .tab-item.center-tab { margin: 0 auto; }
+
+  /* ── 底部指示条 ── */
+  .home-indicator {
+    width: 200px;
+    height: 8px;
+    background: #d0d0d0;
+    border-radius: 20px;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  /* ── 响应式微调 ── */
+  @media (max-width: 1400px) {
+    body { transform: scale(.7); transform-origin: center center; }
+  }
+  @media (max-width: 1000px) {
+    body { transform: scale(.48); transform-origin: center center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <!-- 灵动岛 -->
+  <div class="dynamic-island"></div>
+
+  <!-- 状态栏 -->
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <!-- 信号 -->
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <rect x="0" y="12" width="6" height="8" rx="1.5" fill="#1a1a2e"/>
+        <rect x="8" y="7" width="6" height="13" rx="1.5" fill="#1a1a2e"/>
+        <rect x="16" y="3" width="6" height="17" rx="1.5" fill="#1a1a2e"/>
+        <rect x="24" y="0" width="6" height="20" rx="1.5" fill="#1a1a2e" opacity=".3"/>
+      </svg>
+      <!-- WiFi -->
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <path d="M14 18.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="#1a1a2e"/>
+        <path d="M9 14a7 7 0 0 1 10 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M4.5 9.5a12 12 0 0 1 19 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <!-- 电池 -->
+      <svg width="36" height="20" viewBox="0 0 36 20" fill="none">
+        <rect x="0" y="1" width="30" height="18" rx="4" stroke="#1a1a2e" stroke-width="2" fill="none"/>
+        <rect x="3" y="4" width="24" height="12" rx="2" fill="#1a1a2e"/>
+        <rect x="32" y="6" width="4" height="8" rx="2" fill="#1a1a2e"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 内容 -->
+  <div class="content">
+
+    <!-- ═══ 第一板块 ═══ -->
+    <div class="section-1">
+      <div class="section-label">今日统计</div>
+      <div class="card-row">
+
+        <!-- 次数 -->
+        <div class="stat-card">
+          <div class="icon-circle">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+          </div>
+          <div class="value">128<span class="unit">次</span></div>
+          <div class="label">次数</div>
+        </div>
+
+        <!-- 公里数 -->
+        <div class="stat-card">
+          <div class="icon-circle">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4ECDC4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+          <div class="value">8.6<span class="unit">km</span></div>
+          <div class="label">公里数</div>
+        </div>
+
+        <!-- 平均BPM -->
+        <div class="stat-card">
+          <div class="icon-circle">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+          </div>
+          <div class="value">145<span class="unit">BPM</span></div>
+          <div class="label">平均BPM</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ═══ 第二板块 ═══ -->
+    <div class="section-2">
+
+      <!-- 圆形按钮 -->
+      <div class="main-btn">
+        <div class="btn-icon">
+          <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" stroke-opacity=".5"/>
+            <path d="M10 8l6 4-6 4V8z" fill="#fff"/>
+          </svg>
+        </div>
+        <div class="btn-text">固定模式</div>
+        <div class="btn-sub">点击开始运动</div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Tab 选项卡（吸底） -->
+  <div class="tab-bar">
+    <div class="tab-item" data-tab="songs">
+      <div class="tab-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"/>
+          <circle cx="6" cy="18" r="3"/>
+          <circle cx="18" cy="16" r="3"/>
+        </svg>
+      </div>
+      <span class="tab-label">歌曲列表</span>
+    </div>
+
+    <div class="tab-item center-tab active" data-tab="curve">
+      <div class="tab-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+      </div>
+      <span class="tab-label">曲线</span>
+    </div>
+
+    <div class="tab-item" data-tab="settings">
+      <div class="tab-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <span class="tab-label">设置</span>
+    </div>
+  </div>
+
+  <!-- home indicator -->
+  <div class="home-indicator"></div>
+
+</div>
+
+<script>
+  // Tab 切换交互（视觉反馈，仅用于设计参考）
+  document.querySelectorAll('.tab-item').forEach(item => {
+    item.addEventListener('click', function() {
+      document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+
+      // 更新图标颜色
+      document.querySelectorAll('.tab-item').forEach(t => {
+        const svg = t.querySelector('svg');
+        if (!svg) return;
+        const paths = svg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#555'));
+      });
+      const activeSvg = this.querySelector('svg');
+      if (activeSvg) {
+        const paths = activeSvg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#FF6B6B'));
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
