@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="cn">
+    <head>
+        <link rel="stylesheet" href="mainscreen.css">
+        <title>BPMile</title>
+    </head>
+    <body>
+        <div id="data">
+            <div id="datafirstLine">
+                <div id="data1"></div>
+                <div id="data2"></div>
+                <div id="data3"></div>
+            </div>
+            <div id="datasecondLine">
+                <div id="data4"></div>
+                <div id="data5"></div>
+                <div id="data6"></div>
+            </div>
+        </div>
+        <div id="people">
+            <div id="person-head"></div>
+            <div id="person-body"></div>
+        </div>
+        <div id="choosearea">
+            <!-- 选择区域 -->
+            <!-- 内部两个大圆横向排列作为两种模式，两个大圆之间的距离是半个屏宽减去一个固定数值 -->
+            <!-- 两个大圆只有一个会在屏幕中间，另一个在屏幕边缘漏出一条边 -->
+            <!-- 需要做两个大圆移动的交互代码，比如左侧大圆在中间，右侧大圆在右屏幕边缘，切换则可以得到右侧大圆在中间，左侧大圆在左屏幕边缘 -->
+            <div id="gapL"></div>
+            <div id="circle1"></div>
+            <div id="gapM"></div>
+            <div id="circle2"></div>
+            <div id="gapR"></div>
+        </div>
+        <div id="navbar">
+            <!-- 苹果那种导航栏，左右不要接触，底下也不要接触，圆角悬浮在屏幕底部 -->
+            <div id="bottom1"></div>
+            <div id="bottom2"></div>
+            <div id="bottom3"></div>
+        </div>
+        <script src="mainscreen.js"></script>
+    </body>
+</html>

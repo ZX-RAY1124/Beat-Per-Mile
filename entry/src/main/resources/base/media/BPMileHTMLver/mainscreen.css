@@ -1,0 +1,149 @@
+/* ========== 全局重置 ========== */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ========== 顶部数据区域 ========== */
+#data {
+    width: 100%;
+    height: 50vh;
+    overflow: hidden;
+}
+
+#datafirstLine,
+#datasecondLine {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    width: 100%;
+    height: 50%;
+}
+
+#data1, #data2, #data3,
+#data4, #data5, #data6 {
+    width: 30%;
+    height: 80%;
+    border-radius: 12px;
+    background: #f0f0f0;
+}
+
+/* ========== 小人 ========== */
+#people {
+    position: absolute;
+    bottom: 50vh;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 120px;
+    z-index: 10;
+    transition: left 0.5s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+#person-head {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #333;
+}
+
+#person-body {
+    position: absolute;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 8px;
+    height: 90px;
+    border-radius: 4px;
+    background: #333;
+}
+
+/* ========== 选择区域 ========== */
+#choosearea {
+    position: relative;
+    width: 100%;
+    height: 25vh;
+    overflow: hidden;
+}
+
+/* 大圆通用样式 */
+#circle1,
+#circle2 {
+    position: absolute;
+    top: 50%;
+    border-radius: 50%;
+    width: 25vh;
+    height: 25vh;
+    transition: left 0.5s cubic-bezier(0.25, 0.1, 0.25, 1), transform 0.5s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+#circle1 {
+    background: #1a1a2e;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+#circle2 {
+    background: #16213e;
+    /* 圆宽度为25vh，左边缘在屏幕右边缘往左30px，露出30px的边 */
+    left: calc(100% - 30px);
+    transform: translateY(-50%);
+}
+
+/* 辅助间距元素（后续交互用） */
+#gapL,
+#gapM,
+#gapR {
+    display: none;
+}
+
+/* ========== 底部导航栏 ========== */
+#navbar {
+    /* 苹果风格悬浮导航栏：左右不接触、底部不接触、圆角 */
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    width: calc(100% - 60px);
+    max-width: 400px;
+    height: 60px;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 30px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    z-index: 100;
+}
+
+#bottom1,
+#bottom2,
+#bottom3 {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: #e0e0e0;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+#bottom1:hover,
+#bottom2:hover,
+#bottom3:hover {
+    background: #c0c0c0;
+}
