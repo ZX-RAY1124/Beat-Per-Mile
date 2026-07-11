@@ -1,6 +1,7 @@
 import { HdsNavDestination, HdsNavigation } from '@hms.hds.hdsBaseComponent';
 import { Center_Button } from './Button';
 import { EllipseShape } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI'
 
 @Preview
 @Component
@@ -8,11 +9,29 @@ struct Main {
 
   @State navPathStack: NavPathStack = new NavPathStack();
   @State selected_id: number = 1;
-  private scroller: Scroller = new Scroller();      //创建Scroller
+  @State windowWidth: number = 0;
+  @State windowHeight: number = 0;
+  @State gesture_offset: number = 0;
+  @State gesture_start: number = 0;
 
 
   @State Button_1 : Center_Button = new Center_Button(1)
   @State Button_2 : Center_Button = new Center_Button(2)
+
+  aboutToAppear(): void {
+    try {
+      window.getLastWindow(this.getUIContext().getHostContext())
+        .then((windowClass: window.Window) => {
+          const properties = windowClass.getWindowProperties();
+          const rect = properties.windowRect
+          this.windowWidth = px2vp(rect.width) //get window's width
+          this.windowHeight = px2vp(rect.height) // get window's height
+        })
+
+      } catch (exception){
+      console.error('出现异常' + JSON.stringify(exception))
+    }
+  }
 
 
   build() {
@@ -24,7 +43,7 @@ struct Main {
           .offset({ y: -100 })
 
 
-          List({scroller:this.scroller}) {
+          Row() {          //按钮模块
           /*
 
           *    记得开头结尾修改为 (l + d) / 2
@@ -33,12 +52,10 @@ struct Main {
           *
            */
 
-            ListItem(){
-              Row().width(1000)
-            }
+            Blank().width((this.windowWidth - 240)/ 2)
 
-            ListItem() {
-              Column() {
+
+              Column() {      //第一个按钮
                 Column()
                   .width(40)
                   .height(40)
@@ -46,7 +63,7 @@ struct Main {
                   .animation({ duration: 1200 })
                   .offset({ x: this.Button_1.animator.x, y: -this.Button_1.animator.y + 50 })
                   .onClick(() => {
-
+                    console.log(this.windowWidth.toString())   //test
                   })
 
 
@@ -78,11 +95,12 @@ struct Main {
 
 
               })
-            }.margin({right:20})
-            ListItem() {
 
 
-              Column() {
+            Blank().width((this.windowWidth - 240)/ 2)
+
+
+              Column() {         //第二个按钮
                 Column()
                   .width(40)
                   .height(40)
@@ -120,18 +138,46 @@ struct Main {
 
 
               })
-            }
-            ListItem(){
-              Row().width(1000)
-            }
 
-          }.listDirection(Axis.Horizontal)
+            Blank().width((this.windowWidth - 240)/ 2)
+
+
+
+          }
           .alignSelf(ItemAlign.Baseline)
-          .scrollBar(BarState.Off)
-          .width(1000)
-          .margin({ top: 20 })
-        .width('100%')
-        .height('50%')
+          .animation({curve: Curve.EaseOut})
+          .padding({ top: 20 })
+          .position({x:this.gesture_offset, y:"0%"})
+          .width(4000)
+          .height('100%')
+          .gesture(PanGesture({direction: PanDirection.Horizontal})
+            .onActionUpdate((event: GestureEvent) => {
+              this.gesture_offset = event.offsetX + this.gesture_start     // >0 右滑  <0 左滑
+
+              if(this.gesture_offset > 0){
+                console.log("正在右滑" + this.gesture_start.toString())
+              } else if (this.gesture_offset < 0){
+              console.log("正在左滑" + this.gesture_start.toString())
+            }
+      })
+      .onActionEnd((event: GestureEvent) =>{
+              if(this.gesture_offset > 0){
+                if (this.gesture_offset > 50 + this.gesture_start) {
+                  this.gesture_offset = 0;
+                }
+                else this.gesture_offset = - (this.windowWidth - (this.windowWidth - 240)/ 2);
+                this.gesture_start = this.gesture_offset;         //调整初始位置
+
+
+              } else if(this.gesture_offset < 0){
+                if (this.gesture_offset < -50 + this.gesture_start) {
+                  this.gesture_offset = -(this.windowWidth - (this.windowWidth - 240) / 2)
+                }
+                else this.gesture_offset = 0;
+                this.gesture_start = this.gesture_offset;         //调整初始位置
+
+              }
+            }))      //手势滑动
 
       }.width('100%')
       .height('100%')
