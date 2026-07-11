@@ -1,6 +1,6 @@
-import { HdsNavDestination, HdsNavigation } from '@hms.hds.hdsBaseComponent';
+import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
 import { Center_Button } from './Button';
-import { EllipseShape } from '@kit.ArkUI';
+import { curves, EllipseShape } from '@kit.ArkUI';
 import { window } from '@kit.ArkUI'
 
 @Preview
@@ -18,9 +18,20 @@ struct Main {
   @State Button_1 : Center_Button = new Center_Button(1)
   @State Button_2 : Center_Button = new Center_Button(2)
 
+  @Builder
+  Column_UP(){
+    Column(){}.height(100).width(100).borderRadius(20)
+    .shadow({
+      radius: 20,
+      color: '#1A000000',
+      offsetX: 0,
+      offsetY: 4})
+    .margin(5);
+  }
+
   aboutToAppear(): void {
     try {
-      window.getLastWindow(this.getUIContext().getHostContext())
+      window.getLastWindow(this.getUIContext().getHostContext())        //获取窗口大小
         .then((windowClass: window.Window) => {
           const properties = windowClass.getWindowProperties();
           const rect = properties.windowRect
@@ -36,6 +47,15 @@ struct Main {
 
   build() {
     HdsNavDestination() {
+
+      Row(){    //标题三栏
+        this.Column_UP();
+        this.Column_UP();
+        this.Column_UP();
+      }
+
+
+
       Column() {
         Text('主屏幕')
           .fontSize(28)
@@ -60,7 +80,6 @@ struct Main {
                   .width(40)
                   .height(40)
                   .backgroundColor(Color.Orange)
-                  .animation({ duration: 1200 })
                   .offset({ x: this.Button_1.animator.x, y: -this.Button_1.animator.y + 50 })
                   .onClick(() => {
                     console.log(this.windowWidth.toString())   //test
@@ -105,7 +124,6 @@ struct Main {
                   .width(40)
                   .height(40)
                   .backgroundColor(Color.Orange)
-                  .animation({ duration: 1200 })
                   .offset({ x: this.Button_2.animator.x, y: -this.Button_2.animator.y + 50 })
                   .onClick(() => {
 
@@ -145,38 +163,48 @@ struct Main {
 
           }
           .alignSelf(ItemAlign.Baseline)
-          .animation({curve: Curve.EaseOut})
           .padding({ top: 20 })
           .position({x:this.gesture_offset, y:"0%"})
           .width(4000)
           .height('100%')
+
           .gesture(PanGesture({direction: PanDirection.Horizontal})
             .onActionUpdate((event: GestureEvent) => {
-              this.gesture_offset = event.offsetX + this.gesture_start     // >0 右滑  <0 左滑
+              this.getUIContext()?.animateTo({duration: 40, curve: Curve.EaseOut},() => {
+                this.gesture_offset = event.offsetX + this.gesture_start     // >0 右滑  <0 左滑
 
-              if(this.gesture_offset > 0){
-                console.log("正在右滑" + this.gesture_start.toString())
-              } else if (this.gesture_offset < 0){
-              console.log("正在左滑" + this.gesture_start.toString())
-            }
-      })
-      .onActionEnd((event: GestureEvent) =>{
-              if(this.gesture_offset > 0){
+                if(this.gesture_offset > 0){
+                  console.log("正在右滑" + this.gesture_offset.toString())
+                } else if (this.gesture_offset < 0){
+                  console.log("正在左滑" + this.gesture_offset.toString())
+                }
+              })
+            })
+
+
+
+            .onActionEnd((event: GestureEvent) => {
+              this.getUIContext()?.animateTo({curve: curves.springMotion(), duration: 400},() => {
+                //右滑动
                 if (this.gesture_offset > 50 + this.gesture_start) {
                   this.gesture_offset = 0;
+                  this.gesture_start = this.gesture_offset;         //调整初始位置
+
+                } else if(this.gesture_offset < 0) {
+                  if (this.gesture_offset < - 50 + this.gesture_start) {
+                    this.gesture_offset = -(this.windowWidth - (this.windowWidth - 240) / 2)
+                    this.gesture_start = this.gesture_offset;         //调整初始位置
+                  }
+
                 }
-                else this.gesture_offset = - (this.windowWidth - (this.windowWidth - 240)/ 2);
-                this.gesture_start = this.gesture_offset;         //调整初始位置
-
-
-              } else if(this.gesture_offset < 0){
-                if (this.gesture_offset < -50 + this.gesture_start) {
-                  this.gesture_offset = -(this.windowWidth - (this.windowWidth - 240) / 2)
+                if (this.gesture_start !== 0) {
+                  this.gesture_offset = -(this.windowWidth - (this.windowWidth - 240) / 2);
+                  this.gesture_start = this.gesture_offset; //调整初始位置
+                } else if(this.gesture_start === 0) {
+                  this.gesture_offset = 0;
+                  this.gesture_start = this.gesture_offset; //调整初始位置
                 }
-                else this.gesture_offset = 0;
-                this.gesture_start = this.gesture_offset;         //调整初始位置
-
-              }
+              })
             }))      //手势滑动
 
       }.width('100%')
