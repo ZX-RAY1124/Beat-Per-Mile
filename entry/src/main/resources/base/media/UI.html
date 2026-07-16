@@ -82,10 +82,10 @@
   }
 
   .section-1 .section-label {
-    font-size: 36px;
+    font-size: 120px;
     font-weight: 700;
     color: #1a1a2e;
-    margin-bottom: 32px;
+    margin-bottom: 40px;
     letter-spacing: 2px;
   }
 
@@ -96,8 +96,8 @@
 
   .stat-card {
     flex: 1;
-    border-radius: 32px;
-    padding: 36px 24px;
+    border-radius: 36px;
+    padding: 48px 32px;
     background: #ffffff;
     box-shadow: 0 8px 40px rgba(0,0,0,.07);
     display: flex;
@@ -107,7 +107,7 @@
     position: relative;
     overflow: hidden;
     transition: transform .25s ease;
-    min-height: 260px;
+    min-height: 320px;
   }
   .stat-card:hover { transform: translateY(-4px); }
 
@@ -126,35 +126,35 @@
 
   /* 小圆图标 */
   .stat-card .icon-circle {
-    width: 64px;
-    height: 64px;
+    width: 80px;
+    height: 80px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 14px;
+    margin-bottom: 18px;
   }
   .stat-card:nth-child(1) .icon-circle { background: #FFF0ED; }
   .stat-card:nth-child(2) .icon-circle { background: #EDFCF9; }
   .stat-card:nth-child(3) .icon-circle { background: #F5F0FF; }
 
   .stat-card .value {
-    font-size: 56px;
+    font-size: 72px;
     font-weight: 800;
     color: #1a1a2e;
     line-height: 1.1;
   }
   .stat-card .value .unit {
-    font-size: 26px;
+    font-size: 32px;
     font-weight: 500;
     color: #888;
     margin-left: 4px;
   }
   .stat-card .label {
-    font-size: 26px;
+    font-size: 32px;
     color: #888;
     font-weight: 500;
-    margin-top: 6px;
+    margin-top: 8px;
     letter-spacing: 2px;
   }
 
@@ -240,18 +240,32 @@
     margin-top: 8px;
   }
 
-  /* ── 胶囊 Tab 栏（吸底） ── */
+  /* ── 右箭头（向左滑动提示）── */
+  .swipe-arrow {
+    position: absolute;
+    right: -280px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.5;
+    animation: swipe-hint 2s ease-in-out infinite;
+    z-index: 5;
+  }
+  @keyframes swipe-hint {
+    0%, 100% { transform: translateY(-50%) translateX(0); opacity: 0.5; }
+    50% { transform: translateY(-50%) translateX(8px); opacity: 0.9; }
+  }
+
   .tab-bar {
     background: rgba(255,255,255,.72);
     backdrop-filter: blur(40px);
     -webkit-backdrop-filter: blur(40px);
     border: 1px solid rgba(255,255,255,.5);
     border-radius: 100px;
-    padding: 14px 32px;
+    padding: 18px 40px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    width: 920px;
+    width: 1100px;
     flex-shrink: 0;
     box-shadow:
       0 8px 48px rgba(0,0,0,.08),
@@ -267,33 +281,30 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     cursor: pointer;
-    padding: 8px 10px;
+    padding: 12px 16px;
     border-radius: 40px;
     transition: background .2s ease;
     position: relative;
-    min-width: 100px;
+    min-width: 130px;
   }
   .tab-item:hover { background: rgba(255,107,107,.06); }
   .tab-item.active { background: rgba(255,107,107,.10); }
 
   .tab-item .tab-icon { display: flex; align-items: center; justify-content: center; }
   .tab-item .tab-label {
-    font-size: 22px;
+    font-size: 28px;
     color: #555;
     font-weight: 500;
     transition: color .2s ease;
   }
   .tab-item.active .tab-label { color: #FF6B6B; font-weight: 600; }
 
-  /* 中间 tab 居中 */
-  .tab-item.center-tab { margin: 0 auto; }
-
   /* ── 底部指示条 ── */
   .home-indicator {
     width: 200px;
-    height: 8px;
+    height: 10px;
     background: #d0d0d0;
     border-radius: 20px;
     position: absolute;
@@ -355,7 +366,7 @@
         <!-- 次数 -->
         <div class="stat-card">
           <div class="icon-circle">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
             </svg>
           </div>
@@ -366,7 +377,7 @@
         <!-- 公里数 -->
         <div class="stat-card">
           <div class="icon-circle">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4ECDC4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#4ECDC4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <polyline points="12 6 12 12 16 14"/>
             </svg>
@@ -378,7 +389,7 @@
         <!-- 平均BPM -->
         <div class="stat-card">
           <div class="icon-circle">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
             </svg>
           </div>
@@ -402,6 +413,12 @@
         </div>
         <div class="btn-text">固定模式</div>
         <div class="btn-sub">点击开始运动</div>
+      <!-- 右箭头（向左滑动提示） -->
+      <div class="swipe-arrow">
+        <svg width="360" height="360" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18l6-6-6-6"/>
+        </svg>
+      </div>
       </div>
 
     </div>
@@ -410,9 +427,19 @@
 
   <!-- Tab 选项卡（吸底） -->
   <div class="tab-bar">
+    <div class="tab-item" data-tab="start">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M10 8l6 4-6 4V8z" fill="#555" stroke="none"/>
+        </svg>
+      </div>
+      <span class="tab-label">开始</span>
+    </div>
+
     <div class="tab-item" data-tab="songs">
       <div class="tab-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 18V5l12-2v13"/>
           <circle cx="6" cy="18" r="3"/>
           <circle cx="18" cy="16" r="3"/>
@@ -421,9 +448,9 @@
       <span class="tab-label">歌曲列表</span>
     </div>
 
-    <div class="tab-item center-tab active" data-tab="curve">
+    <div class="tab-item active" data-tab="curve">
       <div class="tab-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
         </svg>
       </div>
@@ -432,7 +459,7 @@
 
     <div class="tab-item" data-tab="settings">
       <div class="tab-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>

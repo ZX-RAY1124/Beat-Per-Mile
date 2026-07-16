@@ -1,4 +1,10 @@
 #include "napi/native_api.h"
+#include <iostream>
+
+int main(){
+    std::cout << "main" << std::endl;
+    return 0;
+}
 
 static napi_value Add(napi_env env, napi_callback_info info)
 {
