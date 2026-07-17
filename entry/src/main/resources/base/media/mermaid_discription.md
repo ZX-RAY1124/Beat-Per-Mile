@@ -7,18 +7,19 @@
 flowchart LR
     
     subgraph 主界面
-        A["<div style='text-align:center;'>主界面</div>"]
+        A("<div style='text-align:center;'>主界面</div>")
         B[开始按钮]
         BPM_SET["固定BPM设置(double)"]
         LINER_SET["进入曲线选择界面(Column组件,展示选择的曲线，<br>没有则为'进入曲线选择界面')"]
         used_time[使用次数]
         kilometer[公里数]
         Per_BPM[平均BPM]
-        
+        Detail{{"展开详细数据，图表"}}
+
         A --> B
-        A -->|长按组件| used_time
-        A -->|长按组件|kilometer
-        A -->|长按组件| Per_BPM
+        A --> used_time -->|长按组件| Detail
+        A --> kilometer -->|长按组件| Detail
+        A --> Per_BPM -->|长按组件| Detail
         B --> H(滑动切换)
         H --> |右滑|C[固定模式]
         H --> |左滑|D[动态模式]
@@ -34,10 +35,11 @@ flowchart LR
         media_play --> player
         C --> media_play
         D --> media_play
-        media_play --> pause
+        media_play --> |点击|pause
         pause[暂停]--> end_[结束]
         pause --> back_[返回]
-        back_ -.-> A
+        end_ -.->|长按| A
+        back_ -.->|点击| media_play
         
         subgraph 播放器
             pause_[播放暂停]
@@ -56,21 +58,27 @@ flowchart LR
         make_liner[创建曲线]
         chosen[选择曲线]
         back_liner(退出)
+        slide_liner(滑动菜单)
+        delete_liner[删除曲线]
+        edit_liner[编辑曲线]
         
         LINER_SET --> liner_set -->|点击| make_liner
         liner_set -->|点击选择| chosen
-        liner_set -->|点击| back_liner
-        back_liner -.-> A
+        liner_set --> back_liner
+        liner_set --> |滑动单个ListItem| slide_liner
+        slide_liner -->|点击| delete_liner
+        slide_liner -->|点击| edit_liner
+        back_liner -.->|点击| A
     end
     
     subgraph 歌曲列表界面
         SONG_LIST(歌曲列表) -->|点击| 导入歌曲 --> 导入到列表
         导入歌曲 --> 从服务器加载
         SONG_LIST --> |点击| 创建播放列表
-        SONG_LIST -->|长按列表分格|选择列表进行播放
-        SONG_LIST -->|点击列表分格<br>取消按钮| 删除播放列表
+        SONG_LIST -->|长按列表分隔|选择列表进行播放
+        SONG_LIST -->|点击列表分隔<br>取消按钮| 删除播放列表
         SONG_LIST --> Song_back(退出)
-        Song_back -.-> A
+        Song_back -.->|点击| A
     end
     
     
@@ -78,8 +86,12 @@ flowchart LR
         LINER_MAKER(曲线绘制)
         LINER_SAVE[保存]
         LINER_CLEAR[清空曲线]
-        LINER_MAKER --> LINER_SAVE
-        LINER_MAKER --> LINER_CLEAR
+        LINER_NEW[新建曲线]
+        
+        edit_liner -.->|点击| LINER_MAKER
+        LINER_MAKER -->|点击| LINER_SAVE
+        LINER_MAKER -->|点击| LINER_CLEAR
+        LINER_MAKER -->|点击| LINER_NEW
     end
     
     subgraph 应用设置界面 
@@ -93,7 +105,7 @@ flowchart LR
         
     end
     
-    E --> Start[开始] -.-> A; E --> SONG_LIST; E --> liner[曲线] ;E -->setting[设置]
+    E --> Start[开始] -.->|点击| A; E -->|点击| SONG_LIST; E -->|点击| liner[曲线] ;E -->|点击| setting[设置]
     liner --> LINER_MAKER
     setting --> Setting_page("应用设置界面")
 
