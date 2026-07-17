@@ -1,11 +1,13 @@
 ## 软件交互流程图
 **主界面**  
 <img src=Dev_Display.png width=200>
+<div id="mermaid" style="text-align:center">
+
 ```mermaid
 flowchart LR
     
     subgraph 主界面
-        A[主界面]
+        A["<div style='text-align:center;'>主界面</div>"]
         B[开始按钮]
         BPM_SET["固定BPM设置(double)"]
         LINER_SET["进入曲线选择界面(Column组件,展示选择的曲线，<br>没有则为'进入曲线选择界面')"]
@@ -22,6 +24,9 @@ flowchart LR
         H --> |左滑|D[动态模式]
         C -->|输入| BPM_SET
         D --> |展示|LINER_SET
+        
+        style A fill:#f96,stroke:#333,stroke-width:4px
+        style E fill:#f38,stroke:#333,stroke-width:4px
     end
     A --> E(吸底栏)
     subgraph 运动播放界面
@@ -60,6 +65,7 @@ flowchart LR
     
     subgraph 歌曲列表界面
         SONG_LIST(歌曲列表) -->|点击| 导入歌曲 --> 导入到列表
+        导入歌曲 --> 从服务器加载
         SONG_LIST --> |点击| 创建播放列表
         SONG_LIST -->|长按列表分格|选择列表进行播放
         SONG_LIST -->|点击列表分格<br>取消按钮| 删除播放列表
@@ -70,13 +76,29 @@ flowchart LR
     
     subgraph 曲线绘制界面
         LINER_MAKER(曲线绘制)
+        LINER_SAVE[保存]
+        LINER_CLEAR[清空曲线]
+        LINER_MAKER --> LINER_SAVE
+        LINER_MAKER --> LINER_CLEAR
+    end
+    
+    subgraph 应用设置界面 
+        setting_data_collect[数据统计]
+        setting_adder[应用主题设置]
+        setting_music_server[第三方音乐服务器设置]
+        
+        Setting_page -->|点击| setting_data_collect
+        Setting_page -->|点击| setting_adder
+        Setting_page -->|点击| setting_music_server
+        
     end
     
     E --> Start[开始] -.-> A; E --> SONG_LIST; E --> liner[曲线] ;E -->setting[设置]
     liner --> LINER_MAKER
-    setting --> Setting_page(应用设置界面)
-
+    setting --> Setting_page("应用设置界面")
 
 
 ```
+
+</div>
 
