@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1320, initial-scale=1.0">
+<title>歌曲列表</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f0f2f5;
+    font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+  }
+
+  .phone {
+    width: 1320px;
+    height: 2856px;
+    background: #ffffff;
+    border-radius: 80px;
+    box-shadow:
+      0 0 0 12px #1a1a2e,
+      0 0 0 14px #2d2d44,
+      0 30px 80px rgba(0,0,0,.35);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .status-bar {
+    height: 80px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 48px;
+    font-size: 28px;
+    font-weight: 600;
+    color: #1a1a2e;
+    flex-shrink: 0;
+    margin-top: 12px;
+    z-index: 30;
+  }
+  .status-bar .time { font-weight: 700; }
+  .status-icons { display: flex; gap: 10px; align-items: center; }
+  .status-icons svg { display: block; }
+
+  .dynamic-island {
+    width: 320px;
+    height: 58px;
+    background: #1a1a2e;
+    border-radius: 40px;
+    position: absolute;
+    top: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+  }
+
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 36px 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 36px;
+    position: relative;
+    z-index: 20;
+  }
+  .content::-webkit-scrollbar { display: none; }
+
+  .page-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    padding-top: 8px;
+  }
+  .page-title .title-text {
+    font-size: 70px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+  .add-btn {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    border: none;
+    background: #FF6B6B;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform .2s ease, box-shadow .2s ease;
+    flex-shrink: 0;
+    box-shadow: 0 4px 16px rgba(255,107,107,.30);
+  }
+  .add-btn:hover {
+    transform: scale(1.08);
+    box-shadow: 0 6px 24px rgba(255,107,107,.45);
+  }
+  .add-btn:active { transform: scale(0.92); }
+
+  /* ═══════ 歌曲列表容器 ═══════ */
+  .song-list {
+    flex-shrink: 0;
+    border-radius: 28px;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(0,0,0,.06);
+  }
+
+  /* ── 列表头部（灰色短栏）── */
+  .list-header {
+    background: #f5f5f7;
+    padding: 18px 37px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .list-header .header-label {
+    font-size: 26px;
+    font-weight: 600;
+    color: #888;
+    letter-spacing: 2px;
+  }
+  .list-header .header-count {
+    font-size: 22px;
+    color: #bbb;
+    font-weight: 400;
+    margin-left: auto;
+  }
+
+  /* ── 列表项 ── */
+  .swipe-item-wrapper {
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .list-item {
+    display: flex;
+    align-items: center;
+    padding: 24px 37px;
+    background: #ffffff;
+    gap: 28px;
+    position: relative;
+    transition: transform .35s cubic-bezier(.22,.61,.36,1), background .2s ease;
+    will-change: transform;
+    touch-action: pan-y;
+    cursor: default;
+  }
+  .list-item:hover { background: #fafafa; }
+  .list-item.swiped {
+    transform: translateX(-220px);
+  }
+
+  /* ── 随卡片滑出的操作按钮 ── */
+  .item-actions {
+    position: absolute;
+    left: calc(100% + 20px);
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    z-index: 5;
+  }
+
+  .item-action-btn {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform .2s ease;
+    flex-shrink: 0;
+  }
+  .item-action-btn:active { transform: scale(0.92); }
+
+  .item-action-btn.share {
+    background: linear-gradient(135deg, #4ECDC4, #44B6C6);
+  }
+  .item-action-btn.delete {
+    background: linear-gradient(135deg, #FF6B6B, #ee5a5a);
+  }
+
+  /* 分割线 */
+  .list-item::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 37px;
+    right: 37px;
+    height: 1px;
+    background: #e8e8e8;
+  }
+  .list-item:last-child::after { display: none; }
+
+  /* ── 左滑提示箭头 ── */
+  .swipe-hint {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 3;
+    opacity: 0;
+    animation: hint-pulse 4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .swipe-item-wrapper:nth-child(3) .swipe-hint { animation-delay: 0.8s; }
+  .swipe-item-wrapper:nth-child(5) .swipe-hint { animation-delay: 1.6s; }
+  .swipe-item-wrapper:nth-child(7) .swipe-hint { animation-delay: 2.4s; }
+  .swipe-item-wrapper:nth-child(9) .swipe-hint { animation-delay: 3.2s; }
+
+  @keyframes hint-pulse {
+    0%, 100% { opacity: 0.25; transform: translateY(-50%) translateX(0); }
+    50% { opacity: 0.55; transform: translateY(-50%) translateX(6px); }
+  }
+
+  /* 封面 */
+  .album-cover {
+    width: 88px;
+    height: 88px;
+    border-radius: 16px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    font-weight: 700;
+    color: #fff;
+    overflow: hidden;
+  }
+
+  /* 歌曲信息 */
+  .song-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .song-name {
+    font-size: 30px;
+    font-weight: 600;
+    color: #1a1a2e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .song-artist {
+    font-size: 24px;
+    color: #999;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* 右侧信息 */
+  .song-meta {
+    text-align: right;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  .song-duration {
+    font-size: 28px;
+    font-weight: 600;
+    color: #1a1a2e;
+    letter-spacing: 1px;
+  }
+  .song-bpm {
+    font-size: 22px;
+    color: #FF6B6B;
+    font-weight: 500;
+    letter-spacing: 1px;
+  }
+
+  /* 封面渐变色 */
+  .cover-0 { background: linear-gradient(135deg, #FF6B6B, #FF8E53); }
+  .cover-1 { background: linear-gradient(135deg, #4ECDC4, #44B6C6); }
+  .cover-2 { background: linear-gradient(135deg, #A78BFA, #7C3AED); }
+  .cover-3 { background: linear-gradient(135deg, #FF8E53, #FFB347); }
+  .cover-4 { background: linear-gradient(135deg, #44B6C6, #4ECDC4); }
+  .cover-5 { background: linear-gradient(135deg, #F6C445, #F5A623); }
+  .cover-6 { background: linear-gradient(135deg, #E0607A, #D4506C); }
+  .cover-7 { background: linear-gradient(135deg, #667eea, #764ba2); }
+  .cover-8 { background: linear-gradient(135deg, #11998e, #38ef7d); }
+
+  /* ========== Tab 选项卡 ========== */
+  .tab-bar {
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 100px;
+    padding: 18px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 1100px;
+    flex-shrink: 0;
+    box-shadow:
+      0 8px 48px rgba(0,0,0,.08),
+      inset 0 1px 0 rgba(255,255,255,.6);
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+  }
+
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 12px 16px;
+    border-radius: 40px;
+    transition: background .2s ease;
+    position: relative;
+    min-width: 130px;
+  }
+  .tab-item:hover { background: rgba(255,107,107,.06); }
+  .tab-item.active { background: rgba(255,107,107,.10); }
+
+  .tab-item .tab-icon { display: flex; align-items: center; justify-content: center; }
+  .tab-item .tab-label {
+    font-size: 28px;
+    color: #555;
+    font-weight: 500;
+    transition: color .2s ease;
+  }
+  .tab-item.active .tab-label { color: #FF6B6B; font-weight: 600; }
+
+  .home-indicator {
+    width: 200px;
+    height: 10px;
+    background: #d0d0d0;
+    border-radius: 20px;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+  }
+
+  @media (max-width: 1400px) {
+    body { transform: scale(.7); transform-origin: center center; }
+  }
+  @media (max-width: 1000px) {
+    body { transform: scale(.48); transform-origin: center center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <div class="dynamic-island"></div>
+
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <rect x="0" y="12" width="6" height="8" rx="1.5" fill="#1a1a2e"/>
+        <rect x="8" y="7" width="6" height="13" rx="1.5" fill="#1a1a2e"/>
+        <rect x="16" y="3" width="6" height="17" rx="1.5" fill="#1a1a2e"/>
+        <rect x="24" y="0" width="6" height="20" rx="1.5" fill="#1a1a2e" opacity=".3"/>
+      </svg>
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <path d="M14 18.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="#1a1a2e"/>
+        <path d="M9 14a7 7 0 0 1 10 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M4.5 9.5a12 12 0 0 1 19 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <svg width="36" height="20" viewBox="0 0 36 20" fill="none">
+        <rect x="0" y="1" width="30" height="18" rx="4" stroke="#1a1a2e" stroke-width="2" fill="none"/>
+        <rect x="3" y="4" width="24" height="12" rx="2" fill="#1a1a2e"/>
+        <rect x="32" y="6" width="4" height="8" rx="2" fill="#1a1a2e"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="content" id="content">
+    <div class="page-title">
+      <span class="title-text">歌曲列表</span>
+      <button class="add-btn" title="添加歌曲">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+    </div>
+    <div id="list-container"></div>
+  </div>
+
+  <div class="tab-bar">
+    <div class="tab-item" data-tab="start">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M10 8l6 4-6 4V8z" fill="#555" stroke="none"/>
+        </svg>
+      </div>
+      <span class="tab-label">开始</span>
+    </div>
+    <div class="tab-item active" data-tab="songs">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"/>
+          <circle cx="6" cy="18" r="3"/>
+          <circle cx="18" cy="16" r="3"/>
+        </svg>
+      </div>
+      <span class="tab-label">歌曲列表</span>
+    </div>
+    <div class="tab-item" data-tab="curve">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+      </div>
+      <span class="tab-label">曲线</span>
+    </div>
+    <div class="tab-item" data-tab="settings">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <span class="tab-label">设置</span>
+    </div>
+  </div>
+
+  <div class="home-indicator"></div>
+
+</div>
+
+<script>
+  // ── 歌曲数据 ──
+  const songNames = [
+    '奔跑的节奏', '晨曦微光', '星夜狂想', '海风与浪',
+    '都市夜行', '山间小径', '烈焰战歌', '月光奏鸣',
+    '疾风飞驰', '雨后晴空', '极光之舞', '深蓝秘境',
+    '火山律动', '冰川纪行', '沙漠驼铃', '云端漫步',
+    '雷霆万钧', '花海徜徉'
+  ];
+  const artists = [
+    '奔跑乐团', '晨曦乐队', '星夜合唱团', '海浪音乐',
+    '都市节拍', '山韵组合', '烈火摇滚', '月光诗人',
+    '风速乐队', '晴空万里', '极光计划', '蓝洞唱片',
+    '岩浆音乐', '冰之韵', '沙漠之舟', '云上音乐',
+    '雷霆工作室', '花海之声'
+  ];
+
+  // BPM 范围 90~180
+  function randBPM() { return Math.floor(Math.random() * 90 + 90); }
+  // 时长 2:00 ~ 5:30
+  function randDuration() {
+    const totalSec = Math.floor(Math.random() * 210 + 120);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
+  // ── 构建一个列表 ──
+  function buildList(label, startIdx, count) {
+    let html = `<div class="song-list">`;
+    html += `<div class="list-header">
+      <span class="header-label">${label}</span>
+      <span class="header-count">${count} 首</span>
+    </div>`;
+    for (let i = 0; i < count; i++) {
+      const idx = startIdx + i;
+      const coverClass = `cover-${idx % 9}`;
+      const name = songNames[idx % songNames.length];
+      const artist = artists[idx % artists.length];
+      const duration = randDuration();
+      const bpm = randBPM();
+      // 封面字母取歌曲名首字
+      const coverLetter = name.charAt(0);
+
+      html += `
+      <div class="swipe-item-wrapper">
+        <div class="list-item">
+          <div class="album-cover ${coverClass}">${coverLetter}</div>
+          <div class="song-info">
+            <div class="song-name">${name}</div>
+            <div class="song-artist">${artist}</div>
+          </div>
+          <div class="song-meta">
+            <div class="song-duration">${duration}</div>
+            <div class="song-bpm">BPM：${bpm}</div>
+          </div>
+          <div class="item-actions">
+            <button class="item-action-btn share" title="分享">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+            </button>
+            <button class="item-action-btn delete" title="删除">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="swipe-hint">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  // ── 渲染 ──
+  const container = document.getElementById('list-container');
+  container.innerHTML = buildList('播放列表1', 0, 9) + buildList('播放列表2', 9, 9);
+
+  // ── 滑动交互 ──
+  document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
+    const item = wrapper.querySelector('.list-item');
+    let startX = 0, startY = 0;
+    let isDragging = false;
+    let currentX = 0;
+    const threshold = 60;
+
+    function resetItem(animate = true) {
+      if (!animate) item.style.transition = 'none';
+      else item.style.transition = 'transform .35s cubic-bezier(.22,.61,.36,1), background .2s ease';
+      item.classList.remove('swiped');
+      item.style.transform = '';
+      currentX = 0;
+    }
+
+    function snapOpen() {
+      item.style.transition = 'transform .35s cubic-bezier(.22,.61,.36,1), background .2s ease';
+      item.classList.add('swiped');
+      item.style.transform = '';
+      currentX = -220;
+    }
+
+    wrapper.addEventListener('touchstart', e => {
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      isDragging = false;
+      item.style.transition = 'none';
+    }, { passive: true });
+
+    wrapper.addEventListener('touchmove', e => {
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (!isDragging && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dy) > Math.abs(dx)) {
+        if (isDragging) resetItem();
+        isDragging = false;
+        return;
+      }
+      e.preventDefault();
+      isDragging = true;
+      let tx = dx;
+      if (item.classList.contains('swiped')) tx += -220;
+      if (tx > 0) tx = 0;
+      if (tx < -260) tx = -260;
+      item.style.transform = `translateX(${tx}px)`;
+      currentX = tx;
+    }, { passive: false });
+
+    wrapper.addEventListener('touchend', () => {
+      if (!isDragging) return;
+      if (item.classList.contains('swiped')) {
+        if (currentX > -140) resetItem();
+        else snapOpen();
+      } else {
+        if (currentX < -threshold) snapOpen();
+        else resetItem();
+      }
+      isDragging = false;
+    }, { passive: true });
+
+    // 鼠标拖动
+    let mouseDown = false;
+    wrapper.addEventListener('mousedown', e => {
+      startX = e.clientX;
+      startY = e.clientY;
+      mouseDown = true;
+      isDragging = false;
+      item.style.transition = 'none';
+    });
+    document.addEventListener('mousemove', e => {
+      if (!mouseDown && !isDragging) return;
+      if (!isDragging && !mouseDown) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!isDragging && Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      if (!isDragging) {
+        if (Math.abs(dy) > Math.abs(dx)) { mouseDown = false; return; }
+        isDragging = true;
+      }
+      let tx = dx;
+      if (item.classList.contains('swiped')) tx += -220;
+      if (tx > 0) tx = 0;
+      if (tx < -260) tx = -260;
+      item.style.transform = `translateX(${tx}px)`;
+      currentX = tx;
+    });
+    document.addEventListener('mouseup', () => {
+      if (!isDragging) { mouseDown = false; return; }
+      if (item.classList.contains('swiped')) {
+        if (currentX > -140) resetItem();
+        else snapOpen();
+      } else {
+        if (currentX < -threshold) snapOpen();
+        else resetItem();
+      }
+      isDragging = false;
+      mouseDown = false;
+    });
+  });
+
+  // ── 分享/删除按钮点击 ──
+  document.querySelectorAll('.item-action-btn.share').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name = btn.closest('.list-item').querySelector('.song-name').textContent;
+      alert(`分享：${name}`);
+    });
+  });
+  document.querySelectorAll('.item-action-btn.delete').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const wrapper = btn.closest('.swipe-item-wrapper');
+      const name = wrapper.querySelector('.song-name').textContent;
+      if (confirm(`确定删除「${name}」？`)) {
+        const item = wrapper.querySelector('.list-item');
+        item.style.transition = 'transform .3s ease, opacity .3s ease';
+        item.style.transform = 'translateX(100%)';
+        item.style.opacity = '0';
+        setTimeout(() => { wrapper.remove(); }, 350);
+      }
+    });
+  });
+
+  // ── 添加按钮 ──
+  document.querySelector('.add-btn').addEventListener('click', () => {
+    alert('添加新歌曲');
+  });
+
+  // ── Tab 切换 ──
+  document.querySelectorAll('.tab-item').forEach(item => {
+    item.addEventListener('click', function() {
+      document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+      document.querySelectorAll('.tab-item').forEach(t => {
+        const svg = t.querySelector('svg');
+        if (!svg) return;
+        const paths = svg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#555'));
+      });
+      const activeSvg = this.querySelector('svg');
+      if (activeSvg) {
+        const paths = activeSvg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#FF6B6B'));
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

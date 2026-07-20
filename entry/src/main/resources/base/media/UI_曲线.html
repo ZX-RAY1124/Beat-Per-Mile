@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1320, initial-scale=1.0">
+<title>曲线列表</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #080820;
+    background-image:
+      radial-gradient(2px 2px at 8% 12%, rgba(255,255,255,.85), transparent),
+      radial-gradient(1.5px 1.5px at 18% 38%, rgba(255,255,255,.7), transparent),
+      radial-gradient(1px 1px at 27% 5%, rgba(255,255,255,.5), transparent),
+      radial-gradient(2.5px 2.5px at 35% 22%, rgba(255,255,255,.9), transparent),
+      radial-gradient(1.5px 1.5px at 42% 55%, rgba(255,255,255,.6), transparent),
+      radial-gradient(1px 1px at 50% 8%, rgba(255,240,200,.8), transparent),
+      radial-gradient(2px 2px at 58% 30%, rgba(255,255,255,.75), transparent),
+      radial-gradient(1px 1px at 65% 62%, rgba(255,255,255,.45), transparent),
+      radial-gradient(1.5px 1.5px at 72% 16%, rgba(255,255,255,.65), transparent),
+      radial-gradient(2px 2px at 80% 45%, rgba(255,255,255,.85), transparent),
+      radial-gradient(1px 1px at 88% 3%, rgba(255,255,255,.5), transparent),
+      radial-gradient(1.5px 1.5px at 93% 50%, rgba(255,240,200,.7), transparent),
+      radial-gradient(1px 1px at 15% 70%, rgba(255,255,255,.4), transparent),
+      radial-gradient(2px 2px at 45% 80%, rgba(255,255,255,.6), transparent),
+      radial-gradient(1.5px 1.5px at 75% 88%, rgba(255,255,255,.5), transparent),
+      radial-gradient(1px 1px at 5% 90%, rgba(255,255,255,.35), transparent),
+      radial-gradient(1.5px 1.5px at 60% 95%, rgba(255,220,180,.55), transparent),
+      radial-gradient(2px 2px at 30% 92%, rgba(255,255,255,.7), transparent),
+      radial-gradient(1px 1px at 90% 75%, rgba(255,255,255,.4), transparent),
+      radial-gradient(1.5px 1.5px at 20% 50%, rgba(200,220,255,.5), transparent),
+      radial-gradient(1px 1px at 55% 42%, rgba(255,255,255,.3), transparent),
+      radial-gradient(2px 2px at 70% 72%, rgba(255,255,255,.65), transparent),
+      radial-gradient(1px 1px at 38% 68%, rgba(255,255,255,.35), transparent),
+      radial-gradient(1.5px 1.5px at 85% 20%, rgba(255,240,200,.6), transparent),
+      radial-gradient(2px 2px at 48% 15%, rgba(200,220,255,.75), transparent),
+      radial-gradient(1.5px 1.5px at 12% 28%, rgba(255,255,255,.55), transparent),
+      radial-gradient(1px 1px at 95% 60%, rgba(255,255,255,.3), transparent),
+      radial-gradient(1.5px 1.5px at 3% 45%, rgba(255,255,255,.5), transparent),
+      radial-gradient(2px 2px at 40% 35%, rgba(255,220,180,.65), transparent),
+      radial-gradient(1px 1px at 68% 48%, rgba(255,255,255,.4), transparent),
+      radial-gradient(ellipse at 50% 0%, #12123a 0%, transparent 55%);
+    font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+  }
+
+  /* ── 手机外框 ── */
+  .phone {
+    width: 1320px;
+    height: 2856px;
+    background: #0c0c24;
+    border-radius: 80px;
+    box-shadow:
+      0 0 0 12px #1a1a2e,
+      0 0 0 14px #2d2d44,
+      0 30px 80px rgba(0,0,0,.35);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 状态栏 ── */
+  .status-bar {
+    height: 80px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 48px;
+    font-size: 28px;
+    font-weight: 600;
+    color: rgba(255,255,255,.9);
+    flex-shrink: 0;
+    margin-top: 12px;
+    z-index: 30;
+
+  }
+  .status-bar .time { font-weight: 700; }
+  .status-icons { display: flex; gap: 10px; align-items: center; }
+  .status-icons svg { display: block; }
+  .status-icons svg rect,
+  .status-icons svg path { fill: rgba(255,255,255,.85); }
+  .status-icons svg rect[stroke],
+  .status-icons svg path[stroke] { stroke: rgba(255,255,255,.85); fill: none; }
+  .status-icons svg rect[fill="none"] { fill: none; }
+
+  /* ── 灵动岛 ── */
+  .dynamic-island {
+    width: 320px;
+    height: 58px;
+    background: #1a1a2e;
+    border-radius: 40px;
+    position: absolute;
+    top: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+  }
+
+  /* ── 内容区（可滚动）── */
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 40px 36px 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    position: relative;
+    z-index: 20;
+  }
+  .content::-webkit-scrollbar { display: none; }
+
+  /* ── 页面标题 ── */
+  .page-title {
+    font-size: 70px;
+    font-weight: 700;
+    color: #ffffff;
+    flex-shrink: 0;
+    padding-top: 8px;
+  }
+
+  /* ═══════════════════════════════════
+     曲线卡片容器（swipe 容器）
+     ═══════════════════════════════════ */
+  .curve-card-wrapper {
+    position: relative;
+    overflow: hidden;
+    border-radius: 56px;
+    flex-shrink: 0;
+    margin-bottom: 10px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ── 操作按钮（位于卡片右侧外部，随卡片滑动）── */
+  .curve-card-actions {
+    position: absolute;
+    left: calc(100% + 24px);
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    z-index: 5;
+  }
+
+  .action-btn {
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform .2s ease, box-shadow .2s ease;
+    flex-shrink: 0;
+  }
+  .action-btn:active { transform: scale(0.92); }
+
+  .action-btn.share {
+    background: linear-gradient(135deg, #4ECDC4, #44B6C6);
+  }
+  .action-btn.delete {
+    background: linear-gradient(135deg, #FF6B6B, #ee5a5a);
+  }
+
+  /* ── 卡片正面 ── */
+  .curve-card {
+    position: relative;
+    z-index: 2;
+    background: rgba(255,255,255,.07);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-radius: 56px;
+    padding: 32px 36px 28px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.15);
+    display: flex;
+    flex-direction: column;
+    transition: transform .35s cubic-bezier(.22,.61,.36,1);
+    will-change: transform;
+    touch-action: pan-y;
+  }
+  .curve-card.swiped {
+    transform: translateX(-240px);
+  }
+
+  /* 彩色顶条 */
+  .curve-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 6px;
+    border-radius: 56px 56px 0 0;
+  }
+  .curve-card[data-color="0"]::before { background: linear-gradient(90deg, #FF6B6B, #FF8E53); }
+  .curve-card[data-color="1"]::before { background: linear-gradient(90deg, #4ECDC4, #44B6C6); }
+  .curve-card[data-color="2"]::before { background: linear-gradient(90deg, #A78BFA, #7C3AED); }
+  .curve-card[data-color="3"]::before { background: linear-gradient(90deg, #FF8E53, #FFB347); }
+  .curve-card[data-color="4"]::before { background: linear-gradient(90deg, #44B6C6, #4ECDC4); }
+  .curve-card[data-color="5"]::before { background: linear-gradient(90deg, #F6C445, #F5A623); }
+  .curve-card[data-color="6"]::before { background: linear-gradient(90deg, #E0607A, #D4506C); }
+
+  /* ── 卡片头部 ── */
+  .curve-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .curve-title {
+    font-size: 40px;
+    font-weight: 700;
+    color: rgba(255,255,255,.9);
+    letter-spacing: 2px;
+  }
+
+  /* ── 图表区域 ── */
+  .curve-chart {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 0 16px;
+    min-height: 200px;
+  }
+  .curve-chart svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  .chart-line {
+    fill: none;
+    stroke-width: 4;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+  .chart-area {
+    fill-opacity: 0.08;
+  }
+
+  .chart-grid line {
+    stroke: rgba(255,255,255,.08);
+    stroke-width: 1.5;
+    stroke-dasharray: 6 4;
+  }
+
+  /* ── 底部：编辑按钮 ── */
+  .curve-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 4px;
+  }
+  .edit-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 32px;
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 100px;
+    cursor: pointer;
+    font-size: 26px;
+    font-weight: 500;
+    color: rgba(255,255,255,.7);
+    transition: all .25s ease;
+    letter-spacing: 2px;
+  }
+  .edit-btn:hover {
+    background: #FF6B6B;
+    color: #fff;
+    border-color: #FF6B6B;
+  }
+  .edit-btn:hover svg path { stroke: #fff; }
+  .edit-btn svg path { stroke: rgba(255,255,255,.5); }
+
+  /* ── 左滑提示动画 ── */
+  .swipe-hint {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 3;
+    opacity: 0;
+    animation: hint-pulse 4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .curve-card-wrapper:nth-child(2) .swipe-hint { animation-delay: 0.6s; }
+  .curve-card-wrapper:nth-child(3) .swipe-hint { animation-delay: 1.2s; }
+  .curve-card-wrapper:nth-child(4) .swipe-hint { animation-delay: 1.8s; }
+  .curve-card-wrapper:nth-child(5) .swipe-hint { animation-delay: 2.4s; }
+  .curve-card-wrapper:nth-child(6) .swipe-hint { animation-delay: 3.0s; }
+  .curve-card-wrapper:nth-child(7) .swipe-hint { animation-delay: 3.6s; }
+
+  @keyframes hint-pulse {
+    0%, 100% { opacity: 0.3; transform: translateY(-50%) translateX(0); }
+    50% { opacity: 0.65; transform: translateY(-50%) translateX(6px); }
+  }
+
+  /* ========== Tab 选项卡（已隐藏）========== */
+  .tab-bar {
+    visibility:hidden;
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 100px;
+    padding: 18px 40px;ssssssssssss
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 1100px;
+    flex-shrink: 0;
+    box-shadow:
+      0 8px 48px rgba(0,0,0,.08),
+      inset 0 1px 0 rgba(255,255,255,.6);
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+  }
+
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 12px 16px;
+    border-radius: 40px;
+    transition: background .2s ease;
+    position: relative;
+    min-width: 130px;
+  }
+  .tab-item:hover { background: rgba(255,107,107,.06); }
+  .tab-item.active { background: rgba(255,107,107,.10); }
+
+  .tab-item .tab-icon { display: flex; align-items: center; justify-content: center; }
+  .tab-item .tab-label {
+    font-size: 28px;
+    color: #555;
+    font-weight: 500;
+    transition: color .2s ease;
+  }
+  .tab-item.active .tab-label { color: #FF6B6B; font-weight: 600; }
+
+  /* ── 底部指示条 ── */
+  .home-indicator {
+    width: 200px;
+    height: 10px;
+    background: rgba(255,255,255,.2);
+    border-radius: 20px;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+  }
+
+  @media (max-width: 1400px) {
+    body { transform: scale(.7); transform-origin: center center; }
+  }
+  @media (max-width: 1000px) {
+    body { transform: scale(.48); transform-origin: center center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <div class="dynamic-island"></div>
+
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <rect x="0" y="12" width="6" height="8" rx="1.5" fill="#1a1a2e"/>
+        <rect x="8" y="7" width="6" height="13" rx="1.5" fill="#1a1a2e"/>
+        <rect x="16" y="3" width="6" height="17" rx="1.5" fill="#1a1a2e"/>
+        <rect x="24" y="0" width="6" height="20" rx="1.5" fill="#1a1a2e" opacity=".3"/>
+      </svg>
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <path d="M14 18.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="#1a1a2e"/>
+        <path d="M9 14a7 7 0 0 1 10 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M4.5 9.5a12 12 0 0 1 19 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <svg width="36" height="20" viewBox="0 0 36 20" fill="none">
+        <rect x="0" y="1" width="30" height="18" rx="4" stroke="#1a1a2e" stroke-width="2" fill="none"/>
+        <rect x="3" y="4" width="24" height="12" rx="2" fill="#1a1a2e"/>
+        <rect x="32" y="6" width="4" height="8" rx="2" fill="#1a1a2e"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ═══ 内容区 ═══ -->
+  <div class="content" id="content">
+    <div class="page-title">我的曲线</div>
+    <div id="card-list"></div>
+  </div>
+
+  <!-- ═══ Tab 选项卡 ═══ -->
+  <div class="tab-bar">
+    <div class="tab-item" data-tab="start">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M10 8l6 4-6 4V8z" fill="#555" stroke="none"/>
+        </svg>
+      </div>
+      <span class="tab-label">开始</span>
+    </div>
+    <div class="tab-item" data-tab="songs">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"/>
+          <circle cx="6" cy="18" r="3"/>
+          <circle cx="18" cy="16" r="3"/>
+        </svg>
+      </div>
+      <span class="tab-label">歌曲列表</span>
+    </div>
+    <div class="tab-item active" data-tab="curve">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+      </div>
+      <span class="tab-label">曲线</span>
+    </div>
+    <div class="tab-item" data-tab="settings">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <span class="tab-label">设置</span>
+    </div>
+  </div>
+
+  <div class="home-indicator"></div>
+
+</div>
+
+<script>
+  // ── 颜色方案 ──
+  const COLORS = ['#FF6B6B', '#4ECDC4', '#A78BFA', '#FF8E53', '#44B6C6', '#F6C445', '#E0607A'];
+  const COLOR_NAMES = ['暖阳红', '海涛青', '梦幻紫', '落日橙', '碧波蓝', '琥珀金', '玫瑰粉'];
+
+  // ── 生成随机折线数据 ──
+  function generatePolyline(pattern, count, w, h) {
+    const pts = [];
+    const m = 30;
+    const uw = w - 2 * m;
+    const uh = h - 2 * m;
+    const mid = h / 2;
+    for (let i = 0; i < count; i++) {
+      const t = i / (count - 1);
+      const x = m + t * uw;
+      let y;
+      switch (pattern) {
+        case 0: // 上升趋势
+          y = h - m - t * uh * 0.65 + (Math.random() - 0.5) * 50;
+          break;
+        case 1: // 波浪
+          y = mid + Math.sin(t * Math.PI * 2.5) * uh * 0.30 + (Math.random() - 0.5) * 30;
+          break;
+        case 2: // V 形谷
+          y = h - m - Math.abs(t - 0.5) * 2 * uh * 0.55 + (Math.random() - 0.5) * 35;
+          break;
+        case 3: // 山峰
+          y = m + (1 - Math.abs(t - 0.5) * 2) * uh * 0.55 + (Math.random() - 0.5) * 35;
+          break;
+        case 4: // 锯齿
+          y = m + ((i % 3 === 0) ? 0.1 : (i % 3 === 1) ? 0.85 : 0.35) * uh + (Math.random() - 0.5) * 25;
+          break;
+        case 5: // 阶梯
+          y = h - m - Math.floor(t * 4) / 3 * uh * 0.5 + (Math.random() - 0.5) * 20;
+          break;
+        case 6: // puls 平滑起伏
+          y = mid + Math.sin(t * Math.PI * 1.8) * uh * 0.35 + Math.sin(t * Math.PI * 5) * uh * 0.08 + (Math.random() - 0.5) * 20;
+          break;
+      }
+      y = Math.max(m, Math.min(h - m, y));
+      pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+    return pts.join(' ');
+  }
+
+  // ── 生成面积填充路径 ──
+  function areaPath(polylineStr, w, h) {
+    return `M${polylineStr} L${w - 30},${h - 30} L30,${h - 30} Z`;
+  }
+
+  // ── 绘制卡片内的图表 SVG ──
+  function buildChartSVG(color, pattern, idx) {
+    const W = 1100, H = 260;
+    const pts = generatePolyline(pattern, 12, W, H);
+    const polyStr = pts;
+    const areaStr = areaPath(polyStr, W, H);
+
+    // 网格线（3 条水平参考线）
+    let grids = '';
+    for (let i = 1; i <= 3; i++) {
+      const y = (H / 4) * i;
+      grids += `<line x1="30" y1="${y}" x2="${W - 30}" y2="${y}"/>`;
+    }
+
+    return `
+      <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+        <g class="chart-grid">${grids}</g>
+        <path class="chart-area" d="${areaStr}" fill="${color}" opacity="0.08"/>
+        <polyline class="chart-line" points="${polyStr}" stroke="${color}"/>
+        <!-- 端点圆点 -->
+        <circle cx="${polyStr.split(' ')[0].split(',')[0]}" cy="${polyStr.split(' ')[0].split(',')[1]}" r="5" fill="${color}"/>
+      </svg>`;
+  }
+
+  // ── 生成一张卡片 ──
+  function createCard(index) {
+    const color = COLORS[index % COLORS.length];
+    const pattern = index % 7;
+    const chartSVG = buildChartSVG(color, pattern, index);
+
+    return `
+    <div class="curve-card-wrapper" data-index="${index}">
+      <div class="curve-card" data-color="${index % COLORS.length}">
+        <div class="curve-header">
+          <span class="curve-title">曲线${String(index + 1).padStart(2, '0')}</span>
+        </div>
+        <div class="curve-chart">${chartSVG}</div>
+        <div class="curve-footer">
+          <button class="edit-btn">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            编辑
+          </button>
+        </div>
+        <div class="curve-card-actions">
+          <button class="action-btn share" title="分享">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+          </button>
+          <button class="action-btn delete" title="删除">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              <line x1="10" y1="11" x2="10" y2="17"/>
+              <line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="swipe-hint">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#bbb" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18l6-6-6-6"/>
+        </svg>
+      </div>
+    </div>`;
+  }
+
+  // ── 渲染 7 张卡片 ──
+  const container = document.getElementById('card-list');
+  for (let i = 0; i < 7; i++) {
+    container.insertAdjacentHTML('beforeend', createCard(i));
+  }
+
+  // ── 触摸滑动 ──
+  document.querySelectorAll('.curve-card-wrapper').forEach(wrapper => {
+    const card = wrapper.querySelector('.curve-card');
+    let startX = 0, startY = 0;
+    let isDragging = false;
+    let currentX = 0;
+    const threshold = 80;
+
+    function resetCard(animate = true) {
+      if (!animate) card.style.transition = 'none';
+      else card.style.transition = 'transform .35s cubic-bezier(.22,.61,.36,1)';
+      card.classList.remove('swiped');
+      card.style.transform = '';
+      currentX = 0;
+    }
+
+    function snapOpen() {
+      card.style.transition = 'transform .35s cubic-bezier(.22,.61,.36,1)';
+      card.classList.add('swiped');
+      card.style.transform = '';
+      currentX = -240;
+    }
+
+    wrapper.addEventListener('touchstart', e => {
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      isDragging = false;
+      card.style.transition = 'none';
+    }, { passive: true });
+
+    wrapper.addEventListener('touchmove', e => {
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (!isDragging && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dy) > Math.abs(dx)) {
+        if (isDragging) resetCard();
+        isDragging = false;
+        return;
+      }
+      e.preventDefault();
+      isDragging = true;
+      let tx = dx;
+      if (card.classList.contains('swiped')) tx += -240;
+      if (tx > 0) tx = 0;
+      if (tx < -280) tx = -280;
+      card.style.transform = `translateX(${tx}px)`;
+      currentX = tx;
+    }, { passive: false });
+
+    wrapper.addEventListener('touchend', () => {
+      if (!isDragging) return;
+      if (card.classList.contains('swiped')) {
+        if (currentX > -160) resetCard();
+        else snapOpen();
+      } else {
+        if (currentX < -threshold) snapOpen();
+        else resetCard();
+      }
+      isDragging = false;
+    }, { passive: true });
+
+    // 鼠标拖动（桌面调试）
+    let mouseDown = false;
+    wrapper.addEventListener('mousedown', e => {
+      startX = e.clientX;
+      startY = e.clientY;
+      mouseDown = true;
+      isDragging = false;
+      card.style.transition = 'none';
+    });
+    document.addEventListener('mousemove', e => {
+      if (!mouseDown && isDragging) return;
+      if (!isDragging && !mouseDown) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!isDragging && Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      if (!isDragging) {
+        if (Math.abs(dy) > Math.abs(dx)) { mouseDown = false; return; }
+        isDragging = true;
+      }
+      let tx = dx;
+      if (card.classList.contains('swiped')) tx += -240;
+      if (tx > 0) tx = 0;
+      if (tx < -280) tx = -280;
+      card.style.transform = `translateX(${tx}px)`;
+      currentX = tx;
+    });
+    document.addEventListener('mouseup', () => {
+      if (!isDragging) { mouseDown = false; return; }
+      if (card.classList.contains('swiped')) {
+        if (currentX > -160) resetCard();
+        else snapOpen();
+      } else {
+        if (currentX < -threshold) snapOpen();
+        else resetCard();
+      }
+      isDragging = false;
+      mouseDown = false;
+    });
+  });
+
+  // ── 编辑按钮点击反馈 ──
+  document.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const title = btn.closest('.curve-card').querySelector('.curve-title').textContent;
+      alert(`编辑：${title}`);
+    });
+  });
+
+  // ── 分享/删除按钮 ──
+  document.querySelectorAll('.action-btn.share').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const title = btn.closest('.curve-card-wrapper').querySelector('.curve-title').textContent;
+      alert(`分享：${title}`);
+    });
+  });
+  document.querySelectorAll('.action-btn.delete').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const wrapper = btn.closest('.curve-card-wrapper');
+      const title = wrapper.querySelector('.curve-title').textContent;
+      if (confirm(`确定删除「${title}」？`)) {
+        const card = wrapper.querySelector('.curve-card');
+        card.style.transition = 'transform .3s ease, opacity .3s ease';
+        card.style.transform = 'translateX(100%)';
+        card.style.opacity = '0';
+        setTimeout(() => { wrapper.remove(); }, 350);
+      }
+    });
+  });
+
+  // ── Tab 切换（同原设计）──
+  document.querySelectorAll('.tab-item').forEach(item => {
+    item.addEventListener('click', function() {
+      document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+      document.querySelectorAll('.tab-item').forEach(t => {
+        const svg = t.querySelector('svg');
+        if (!svg) return;
+        const paths = svg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#555'));
+      });
+      const activeSvg = this.querySelector('svg');
+      if (activeSvg) {
+        const paths = activeSvg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#FF6B6B'));
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

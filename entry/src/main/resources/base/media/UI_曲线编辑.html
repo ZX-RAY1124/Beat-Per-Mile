@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1320, initial-scale=1.0">
+<title>曲线编辑</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f0f2f5;
+    font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+  }
+
+  .phone {
+    width: 1320px;
+    height: 2856px;
+    background: #ffffff;
+    border-radius: 80px;
+    box-shadow:
+      0 0 0 12px #1a1a2e,
+      0 0 0 14px #2d2d44,
+      0 30px 80px rgba(0,0,0,.35);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .status-bar {
+    height: 80px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 48px;
+    font-size: 28px;
+    font-weight: 600;
+    color: #1a1a2e;
+    flex-shrink: 0;
+    margin-top: 12px;
+    z-index: 30;
+  }
+  .status-bar .time { font-weight: 700; }
+  .status-icons { display: flex; gap: 10px; align-items: center; }
+  .status-icons svg { display: block; }
+
+  .dynamic-island {
+    width: 320px;
+    height: 58px;
+    background: #1a1a2e;
+    border-radius: 40px;
+    position: absolute;
+    top: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+  }
+
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 28px 36px 40px;
+    position: relative;
+    z-index: 20;
+    overflow: hidden;
+  }
+
+  .page-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    padding-bottom: 16px;
+  }
+  .page-title .title-text {
+    font-size: 52px;
+    font-weight: 700;
+    color: #1a1a2e;
+  }
+  .page-title .point-count {
+    font-size: 26px;
+    color: #999;
+    font-weight: 500;
+  }
+
+  /* ═══════════ 图表区域 ═══════════ */
+  .chart-section {
+    flex: 1;
+    min-height: 0;
+    border-radius: 36px;
+    background: #ffffff;
+    box-shadow: 0 4px 32px rgba(0,0,0,.06);
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .chart-section canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border-radius: 20px;
+    cursor: crosshair;
+  }
+
+  /* ═══════════ 控制区域 ═══════════ */
+  .controls-section {
+    flex: 1;
+    padding-top: 42px;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+  }
+
+  /* ── 行1：输入 + 保存点 ── */
+  .input-row {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .input-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+  }
+  .input-group .label {
+    font-size: 42px;
+    font-weight: 600;
+    color: #1a1a2e;
+    flex-shrink: 0;
+  }
+  .input-group input {
+    flex: 1;
+    height: 102px;
+    border: 3px solid #e8e8e8;
+    border-radius: 20px;
+    padding: 0 28px;
+    font-size: 44px;
+    font-weight: 500;
+    color: #1a1a2e;
+    outline: none;
+    transition: border-color .2s ease;
+    font-family: inherit;
+    min-width: 0;
+  }
+  .input-group input:focus {
+    border-color: #FF6B6B;
+  }
+  .input-group input::placeholder {
+    color: #ccc;
+  }
+
+  .btn-save-point {
+    height: 102px;
+    padding: 0 54px;
+    border: none;
+    border-radius: 100px;
+    background: linear-gradient(135deg, #FF6B6B, #FF8E53);
+    color: #fff;
+    font-size: 42px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .2s ease, box-shadow .2s ease;
+    white-space: nowrap;
+    font-family: inherit;
+    letter-spacing: 2px;
+    flex-shrink: 0;
+  }
+  .btn-save-point:hover {
+    transform: scale(1.03);
+    box-shadow: 0 4px 20px rgba(255,107,107,.30);
+  }
+  .btn-save-point:active { transform: scale(0.96); }
+
+  /* ── 行2：删除/清空 ── */
+  .action-row {
+    display: flex;
+    gap: 24px;
+  }
+  .action-row .btn {
+    flex: 1;
+    height: 108px;
+    border: none;
+    border-radius: 100px;
+    font-size: 40px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .2s ease, box-shadow .2s ease;
+    font-family: inherit;
+    letter-spacing: 2px;
+  }
+  .action-row .btn:active { transform: scale(0.96); }
+
+  .btn-delete-point {
+    background: #f7f7f9;
+    border: 3px solid #e8e8e8 !important;
+    color: #666;
+  }
+  .btn-delete-point:hover {
+    border-color: #FF6B6B !important;
+    color: #FF6B6B;
+  }
+
+  .btn-clear-all {
+    background: #f7f7f9;
+    border: 3px solid #e8e8e8 !important;
+    color: #666;
+  }
+  .btn-clear-all:hover {
+    border-color: #A78BFA !important;
+    color: #A78BFA;
+  }
+
+  /* ── 行3：保存曲线 ── */
+  .save-row .btn-save-curve {
+    width: 100%;
+    height: 114px;
+    border: none;
+    border-radius: 100px;
+    background: linear-gradient(135deg, #FF6B6B, #FF8E53);
+    color: #fff;
+    font-size: 44px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .2s ease, box-shadow .2s ease;
+    font-family: inherit;
+    letter-spacing: 4px;
+  }
+  .save-row .btn-save-curve:hover {
+    transform: scale(1.02);
+    box-shadow: 0 6px 28px rgba(255,107,107,.35);
+  }
+  .save-row .btn-save-curve:active { transform: scale(0.97); }
+
+  /* ========== Tab 选项卡 ========== */
+  .tab-bar {
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 100px;
+    padding: 18px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 1100px;
+    flex-shrink: 0;
+    box-shadow:
+      0 8px 48px rgba(0,0,0,.08),
+      inset 0 1px 0 rgba(255,255,255,.6);
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+  }
+
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 12px 16px;
+    border-radius: 40px;
+    transition: background .2s ease;
+    position: relative;
+    min-width: 130px;
+  }
+  .tab-item:hover { background: rgba(255,107,107,.06); }
+  .tab-item.active { background: rgba(255,107,107,.10); }
+
+  .tab-item .tab-icon { display: flex; align-items: center; justify-content: center; }
+  .tab-item .tab-label {
+    font-size: 28px;
+    color: #555;
+    font-weight: 500;
+    transition: color .2s ease;
+  }
+  .tab-item.active .tab-label { color: #FF6B6B; font-weight: 600; }
+
+  .home-indicator {
+    width: 200px;
+    height: 10px;
+    background: #d0d0d0;
+    border-radius: 20px;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+  }
+
+  @media (max-width: 1400px) {
+    body { transform: scale(.7); transform-origin: center center; }
+  }
+  @media (max-width: 1000px) {
+    body { transform: scale(.48); transform-origin: center center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <div class="dynamic-island"></div>
+
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <rect x="0" y="12" width="6" height="8" rx="1.5" fill="#1a1a2e"/>
+        <rect x="8" y="7" width="6" height="13" rx="1.5" fill="#1a1a2e"/>
+        <rect x="16" y="3" width="6" height="17" rx="1.5" fill="#1a1a2e"/>
+        <rect x="24" y="0" width="6" height="20" rx="1.5" fill="#1a1a2e" opacity=".3"/>
+      </svg>
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <path d="M14 18.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="#1a1a2e"/>
+        <path d="M9 14a7 7 0 0 1 10 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M4.5 9.5a12 12 0 0 1 19 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <svg width="36" height="20" viewBox="0 0 36 20" fill="none">
+        <rect x="0" y="1" width="30" height="18" rx="4" stroke="#1a1a2e" stroke-width="2" fill="none"/>
+        <rect x="3" y="4" width="24" height="12" rx="2" fill="#1a1a2e"/>
+        <rect x="32" y="6" width="4" height="8" rx="2" fill="#1a1a2e"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="page-title">
+      <span class="title-text">创建曲线</span>
+      <span class="point-count" id="pointCount">0 个点</span>
+    </div>
+
+    <div class="chart-section">
+      <canvas id="chartCanvas" width="1200" height="700"></canvas>
+    </div>
+
+    <div class="controls-section">
+      <div class="input-row">
+        <div class="input-group">
+          <span class="label">X：</span>
+          <input type="number" id="inputX" placeholder="0" step="1">
+        </div>
+        <div class="input-group">
+          <span class="label">Y：</span>
+          <input type="number" id="inputY" placeholder="0" step="1">
+        </div>
+        <button class="btn-save-point" id="btnSavePoint">保存点</button>
+      </div>
+
+      <div class="action-row">
+        <button class="btn btn-delete-point" id="btnDeletePoint">删除选中的点</button>
+        <button class="btn btn-clear-all" id="btnClearAll">清空曲线</button>
+      </div>
+
+      <div class="save-row">
+        <button class="btn-save-curve" id="btnSaveCurve">保存曲线</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Tab 选项卡 ═══ -->
+  <div class="tab-bar">
+    <div class="tab-item" data-tab="start">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M10 8l6 4-6 4V8z" fill="#555" stroke="none"/>
+        </svg>
+      </div>
+      <span class="tab-label">开始</span>
+    </div>
+    <div class="tab-item" data-tab="songs">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"/>
+          <circle cx="6" cy="18" r="3"/>
+          <circle cx="18" cy="16" r="3"/>
+        </svg>
+      </div>
+      <span class="tab-label">歌曲列表</span>
+    </div>
+    <div class="tab-item active" data-tab="curve">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+      </div>
+      <span class="tab-label">曲线</span>
+    </div>
+    <div class="tab-item" data-tab="settings">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <span class="tab-label">设置</span>
+    </div>
+  </div>
+
+  <div class="home-indicator"></div>
+
+</div>
+
+<script>
+  const canvas = document.getElementById('chartCanvas');
+  const ctx = canvas.getContext('2d');
+  const pointCountEl = document.getElementById('pointCount');
+  const inputX = document.getElementById('inputX');
+  const inputY = document.getElementById('inputY');
+
+  // ── 数据 ──
+  let points = [
+    { x: 1, y: 3 },
+    { x: 2, y: 5 },
+    { x: 3, y: 2 },
+    { x: 4, y: 7 },
+    { x: 5, y: 4 },
+    { x: 6, y: 8 },
+    { x: 7, y: 6 },
+  ];
+  let selectedIndex = -1;
+  const POINT_RADIUS = 10;
+
+  // ── 坐标映射（数据空间 → 画布像素）──
+  const MARGIN = { top: 30, right: 30, bottom: 50, left: 60 };
+
+  function getBounds() {
+    if (points.length === 0) return { minX: 0, maxX: 10, minY: 0, maxY: 10 };
+    let minX = Math.min(...points.map(p => p.x));
+    let maxX = Math.max(...points.map(p => p.x));
+    let minY = Math.min(...points.map(p => p.y));
+    let maxY = Math.max(...points.map(p => p.y));
+    const padX = (maxX - minX) * 0.15 || 1;
+    const padY = (maxY - minY) * 0.15 || 1;
+    return {
+      minX: minX - padX, maxX: maxX + padX,
+      minY: minY - padY, maxY: maxY + padY,
+    };
+  }
+
+  function toPixel(px, py, bounds) {
+    const w = canvas.width, h = canvas.height;
+    const plotW = w - MARGIN.left - MARGIN.right;
+    const plotH = h - MARGIN.top - MARGIN.bottom;
+    const x = MARGIN.left + ((px - bounds.minX) / (bounds.maxX - bounds.minX)) * plotW;
+    const y = MARGIN.top + (1 - (py - bounds.minY) / (bounds.maxY - bounds.minY)) * plotH;
+    return { x, y };
+  }
+
+  function toData(cx, cy) {
+    const bounds = getBounds();
+    const w = canvas.width, h = canvas.height;
+    const plotW = w - MARGIN.left - MARGIN.right;
+    const plotH = h - MARGIN.top - MARGIN.bottom;
+    const px = bounds.minX + ((cx - MARGIN.left) / plotW) * (bounds.maxX - bounds.minX);
+    const py = bounds.minY + (1 - (cy - MARGIN.top) / plotH) * (bounds.maxY - bounds.minY);
+    return { x: Math.round(px * 10) / 10, y: Math.round(py * 10) / 10 };
+  }
+
+  function hitTest(cx, cy) {
+    const bounds = getBounds();
+    for (let i = points.length - 1; i >= 0; i--) {
+      const p = toPixel(points[i].x, points[i].y, bounds);
+      const dx = cx - p.x, dy = cy - p.y;
+      if (dx * dx + dy * dy <= (POINT_RADIUS + 6) * (POINT_RADIUS + 6)) return i;
+    }
+    return -1;
+  }
+
+  // ── 绘制 ──
+  function draw() {
+    const w = canvas.width, h = canvas.height;
+    const bounds = getBounds();
+    const plotW = w - MARGIN.left - MARGIN.right;
+    const plotH = h - MARGIN.top - MARGIN.bottom;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // 背景
+    ctx.fillStyle = '#fafafe';
+    ctx.fillRect(0, 0, w, h);
+
+    // ── 网格 ──
+    ctx.strokeStyle = '#e8e8f0';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+
+    const gridXSteps = 6;
+    const gridYSteps = 5;
+    for (let i = 0; i <= gridXSteps; i++) {
+      const x = MARGIN.left + (i / gridXSteps) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, MARGIN.top); ctx.lineTo(x, MARGIN.top + plotH); ctx.stroke();
+    }
+    for (let i = 0; i <= gridYSteps; i++) {
+      const y = MARGIN.top + (i / gridYSteps) * plotH;
+      ctx.beginPath(); ctx.moveTo(MARGIN.left, y); ctx.lineTo(MARGIN.left + plotW, y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // ── 坐标轴 ──
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 2;
+    // X 轴
+    const xAxisY = MARGIN.top + plotH;
+    ctx.beginPath(); ctx.moveTo(MARGIN.left, xAxisY); ctx.lineTo(MARGIN.left + plotW, xAxisY); ctx.stroke();
+    // Y 轴
+    ctx.beginPath(); ctx.moveTo(MARGIN.left, MARGIN.top); ctx.lineTo(MARGIN.left, MARGIN.top + plotH); ctx.stroke();
+
+    // 轴标签
+    ctx.fillStyle = '#888';
+    ctx.font = '20px Microsoft YaHei, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (let i = 0; i <= gridXSteps; i++) {
+      const val = bounds.minX + (i / gridXSteps) * (bounds.maxX - bounds.minX);
+      const x = MARGIN.left + (i / gridXSteps) * plotW;
+      ctx.fillText(val.toFixed(1), x, xAxisY + 8);
+    }
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= gridYSteps; i++) {
+      const val = bounds.maxY - (i / gridYSteps) * (bounds.maxY - bounds.minY);
+      const y = MARGIN.top + (i / gridYSteps) * plotH;
+      ctx.fillText(val.toFixed(1), MARGIN.left - 10, y);
+    }
+
+    // ── 折线 ──
+    if (points.length > 0) {
+      ctx.strokeStyle = '#FF6B6B';
+      ctx.lineWidth = 3;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i++) {
+        const p = toPixel(points[i].x, points[i].y, bounds);
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+
+      // 面积填充（柔和）
+      if (points.length >= 2) {
+        ctx.fillStyle = 'rgba(255,107,107,0.06)';
+        ctx.beginPath();
+        const first = toPixel(points[0].x, points[0].y, bounds);
+        const last = toPixel(points[points.length - 1].x, points[points.length - 1].y, bounds);
+        ctx.moveTo(first.x, xAxisY);
+        for (let i = 0; i < points.length; i++) {
+          const p = toPixel(points[i].x, points[i].y, bounds);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.lineTo(last.x, xAxisY);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // ── 数据点 ──
+    for (let i = 0; i < points.length; i++) {
+      const p = toPixel(points[i].x, points[i].y, bounds);
+      const isSelected = (i === selectedIndex);
+
+      // 外圈光晕
+      if (isSelected) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, POINT_RADIUS + 6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,107,107,0.20)';
+        ctx.fill();
+      }
+
+      // 实心点
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, POINT_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected ? '#FF6B6B' : '#4ECDC4';
+      ctx.fill();
+
+      // 白边
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // 选中时白色十字标记
+      if (isSelected) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x - 5, p.y); ctx.lineTo(p.x + 5, p.y);
+        ctx.moveTo(p.x, p.y - 5); ctx.lineTo(p.x, p.y + 5);
+        ctx.stroke();
+      }
+    }
+
+    // ── 更新计数 ──
+    pointCountEl.textContent = `${points.length} 个点`;
+  }
+
+  // ── Canvas 点击：选中或添加点 ──
+  canvas.addEventListener('click', e => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
+
+    const hit = hitTest(cx, cy);
+    if (hit >= 0) {
+      selectedIndex = hit;
+      inputX.value = points[hit].x;
+      inputY.value = points[hit].y;
+    } else {
+      const d = toData(cx, cy);
+      points.push(d);
+      selectedIndex = points.length - 1;
+      inputX.value = d.x;
+      inputY.value = d.y;
+    }
+    draw();
+  });
+
+  // ── 保存点（从输入框添加）──
+  document.getElementById('btnSavePoint').addEventListener('click', () => {
+    const x = parseFloat(inputX.value);
+    const y = parseFloat(inputY.value);
+    if (isNaN(x) || isNaN(y)) { alert('请输入有效的 X 和 Y 值'); return; }
+    points.push({ x, y });
+    selectedIndex = points.length - 1;
+    draw();
+  });
+
+  // ── 删除选中的点 ──
+  document.getElementById('btnDeletePoint').addEventListener('click', () => {
+    if (selectedIndex < 0 || selectedIndex >= points.length) {
+      alert('请先选中一个点'); return;
+    }
+    points.splice(selectedIndex, 1);
+    selectedIndex = Math.min(selectedIndex, points.length - 1);
+    if (selectedIndex >= 0) {
+      inputX.value = points[selectedIndex].x;
+      inputY.value = points[selectedIndex].y;
+    } else {
+      inputX.value = ''; inputY.value = '';
+    }
+    draw();
+  });
+
+  // ── 清空曲线 ──
+  document.getElementById('btnClearAll').addEventListener('click', () => {
+    if (points.length === 0) return;
+    if (confirm('确定清空所有点？')) {
+      points = [];
+      selectedIndex = -1;
+      inputX.value = ''; inputY.value = '';
+      draw();
+    }
+  });
+
+  // ── 保存曲线 ──
+  document.getElementById('btnSaveCurve').addEventListener('click', () => {
+    if (points.length < 2) { alert('至少需要 2 个点才能保存曲线'); return; }
+    alert(`曲线已保存！共 ${points.length} 个点`);
+  });
+
+  // ── 初始绘制 ──
+  draw();
+
+  // ── Tab 切换 ──
+  document.querySelectorAll('.tab-item').forEach(item => {
+    item.addEventListener('click', function() {
+      document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+      document.querySelectorAll('.tab-item').forEach(t => {
+        const svg = t.querySelector('svg');
+        if (!svg) return;
+        const paths = svg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#555'));
+      });
+      const activeSvg = this.querySelector('svg');
+      if (activeSvg) {
+        const paths = activeSvg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#FF6B6B'));
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

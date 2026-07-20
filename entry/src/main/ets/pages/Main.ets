@@ -2,6 +2,7 @@ import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
 import { Center_Button } from './Button';
 import { curves, EllipseShape } from '@kit.ArkUI';
 import { window } from '@kit.ArkUI'
+import lottie, { AnimationItem } from '@ohos/lottie';
 
 @Preview
 @Component
@@ -47,6 +48,9 @@ struct Main {
 
   build() {
     HdsNavDestination() {
+      Text('今日统计')     //开头
+
+
 
       Row(){    //标题三栏
         this.Column_UP();
@@ -57,10 +61,15 @@ struct Main {
 
 
       Column() {
+        Button("测试Lottie动画").height(40).width(120).onClick(() => {        //测试用，记得删掉
+          this.navPathStack.pushPathByName('Animation_test_Page', null, true)
+          console.info('ButtonType.Normal');
+        }).offset({y: -200})
         Text('主屏幕')
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
           .offset({ y: -100 })
+
 
 
           Row() {          //按钮模块
@@ -164,9 +173,9 @@ struct Main {
           }
           .alignSelf(ItemAlign.Baseline)
           .padding({ top: 20 })
-          .position({x:this.gesture_offset, y:"0%"})
+          .position({x:this.gesture_offset, y:"25%"})
           .width(4000)
-          .height('100%')
+          .height('50%')
 
           .gesture(PanGesture({direction: PanDirection.Horizontal})
             .onActionUpdate((event: GestureEvent) => {
