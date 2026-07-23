@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1320, initial-scale=1.0">
+<title>设置 - 界面设计</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f0f2f5;
+    font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+  }
+
+  /* ── 手机外框 ── */
+  .phone {
+    width: 1320px;
+    height: 2856px;
+    background: #ffffff;
+    border-radius: 80px;
+    box-shadow:
+      0 0 0 12px #1a1a2e,
+      0 0 0 14px #2d2d44,
+      0 30px 80px rgba(0,0,0,.35);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 状态栏 ── */
+  .status-bar {
+    height: 80px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 48px;
+    font-size: 28px;
+    font-weight: 600;
+    color: #1a1a2e;
+    flex-shrink: 0;
+    margin-top: 12px;
+  }
+  .status-bar .time { font-weight: 700; }
+  .status-icons { display: flex; gap: 10px; align-items: center; }
+  .status-icons svg { display: block; }
+
+  /* ── 灵动岛 ── */
+  .dynamic-island {
+    width: 320px;
+    height: 58px;
+    background: #1a1a2e;
+    border-radius: 40px;
+    position: absolute;
+    top: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+  }
+
+  /* ── 内容区 ── */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 40px 48px 140px;
+    gap: 20px;
+    position: relative;
+    overflow-y: auto;
+  }
+
+  /* ========== 页面标题 ========== */
+  .page-title {
+    font-size: 56px;
+    font-weight: 700;
+    color: #1a1a2e;
+    padding: 10px 0 10px;
+    flex-shrink: 0;
+  }
+
+  /* ========== 用户资料卡 ========== */
+  .profile-card {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    padding: 32px 28px;
+    background: #f8f9fc;
+    border-radius: 28px;
+    flex-shrink: 0;
+  }
+
+  .avatar {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #A78BFA, #7C3AED);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #fff;
+    font-size: 40px;
+    font-weight: 700;
+  }
+
+  .user-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .user-info .user-name {
+    font-size: 38px;
+    font-weight: 600;
+    color: #1a1a2e;
+  }
+  .user-info .user-sub {
+    font-size: 26px;
+    color: #999;
+  }
+
+  /* ========== 设置分组 ========== */
+  .settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .settings-group .group-label {
+    font-size: 26px;
+    font-weight: 600;
+    color: #999;
+    padding: 16px 8px 8px;
+    letter-spacing: 2px;
+  }
+
+  /* ── 设置行 ── */
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 24px;
+    background: #ffffff;
+    border-radius: 20px;
+    transition: background .2s ease;
+    min-height: 100px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .setting-row:last-child {
+    border-bottom: none;
+  }
+  .setting-row:hover {
+    background: #f8f9fc;
+  }
+
+  .setting-row .row-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .setting-row .row-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .setting-row .row-label {
+    font-size: 32px;
+    font-weight: 500;
+    color: #1a1a2e;
+  }
+
+  .setting-row .row-arrow {
+    color: #ccc;
+    display: flex;
+    align-items: center;
+  }
+
+  /* ── 胶囊开关 ── */
+  .toggle-switch {
+    position: relative;
+    width: 96px;
+    height: 54px;
+    flex-shrink: 0;
+  }
+  .toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .toggle-switch .slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: #d0d0d0;
+    border-radius: 54px;
+    transition: background .3s ease;
+  }
+  .toggle-switch .slider::before {
+    content: '';
+    position: absolute;
+    width: 44px;
+    height: 44px;
+    left: 5px;
+    bottom: 5px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .3s ease;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+  .toggle-switch input:checked + .slider {
+    background: #7C3AED;
+  }
+  .toggle-switch input:checked + .slider::before {
+    transform: translateX(42px);
+  }
+
+  /* ── 分割标题（纯文本） ── */
+  .section-title {
+    font-size: 26px;
+    font-weight: 600;
+    color: #999;
+    padding: 24px 8px 8px;
+    letter-spacing: 2px;
+    flex-shrink: 0;
+  }
+
+  /* ── Tab 选项卡 ── */
+  .tab-bar {
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 100px;
+    padding: 18px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 1100px;
+    flex-shrink: 0;
+    box-shadow:
+      0 8px 48px rgba(0,0,0,.08),
+      inset 0 1px 0 rgba(255,255,255,.6);
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+  }
+
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 12px 16px;
+    border-radius: 40px;
+    transition: background .2s ease;
+    position: relative;
+    min-width: 130px;
+  }
+  .tab-item:hover { background: rgba(124,58,237,.06); }
+  .tab-item.active { background: rgba(124,58,237,.10); }
+
+  .tab-item .tab-icon { display: flex; align-items: center; justify-content: center; }
+  .tab-item .tab-label {
+    font-size: 28px;
+    color: #555;
+    font-weight: 500;
+    transition: color .2s ease;
+  }
+  .tab-item.active .tab-label { color: #7C3AED; font-weight: 600; }
+
+  /* ── 底部指示条 ── */
+  .home-indicator {
+    width: 200px;
+    height: 10px;
+    background: #d0d0d0;
+    border-radius: 20px;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  @media (max-width: 1400px) {
+    body { transform: scale(.7); transform-origin: center center; }
+  }
+  @media (max-width: 1000px) {
+    body { transform: scale(.48); transform-origin: center center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <!-- 灵动岛 -->
+  <div class="dynamic-island"></div>
+
+  <!-- 状态栏 -->
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <rect x="0" y="12" width="6" height="8" rx="1.5" fill="#1a1a2e"/>
+        <rect x="8" y="7" width="6" height="13" rx="1.5" fill="#1a1a2e"/>
+        <rect x="16" y="3" width="6" height="17" rx="1.5" fill="#1a1a2e"/>
+        <rect x="24" y="0" width="6" height="20" rx="1.5" fill="#1a1a2e" opacity=".3"/>
+      </svg>
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <path d="M14 18.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="#1a1a2e"/>
+        <path d="M9 14a7 7 0 0 1 10 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M4.5 9.5a12 12 0 0 1 19 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <svg width="36" height="20" viewBox="0 0 36 20" fill="none">
+        <rect x="0" y="1" width="30" height="18" rx="4" stroke="#1a1a2e" stroke-width="2" fill="none"/>
+        <rect x="3" y="4" width="24" height="12" rx="2" fill="#1a1a2e"/>
+        <rect x="32" y="6" width="4" height="8" rx="2" fill="#1a1a2e"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 内容 -->
+  <div class="content">
+
+    <!-- 页面标题 -->
+    <div class="page-title">设置</div>
+
+    <!-- 用户资料 -->
+    <div class="profile-card">
+      <div class="avatar">👤</div>
+      <div class="user-info">
+        <div class="user-name">运动达人</div>
+        <div class="user-sub">ID: runner_2024</div>
+      </div>
+    </div>
+
+    <!-- 设置列表 - 通用 -->
+    <div class="settings-group">
+      <div class="group-label">通用</div>
+
+      <div class="setting-row">
+        <div class="row-left">
+          <div class="row-icon" style="background:#F5F0FF;">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </div>
+          <span class="row-label">应用主题设置</span>
+        </div>
+        <div class="row-arrow">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="row-left">
+          <div class="row-icon" style="background:#EDFCF9;">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#4ECDC4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="4" y1="21" x2="4" y2="14"/>
+              <line x1="4" y1="10" x2="4" y2="3"/>
+              <line x1="12" y1="21" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12" y2="3"/>
+              <line x1="20" y1="21" x2="20" y2="16"/>
+              <line x1="20" y1="12" x2="20" y2="3"/>
+              <line x1="1" y1="14" x2="7" y2="14"/>
+              <line x1="9" y1="8" x2="15" y2="8"/>
+              <line x1="17" y1="16" x2="23" y2="16"/>
+            </svg>
+          </div>
+          <span class="row-label">算法参数设置</span>
+        </div>
+        <div class="row-arrow">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- 开关选项 -->
+    <div class="section-title">同步</div>
+
+    <div class="setting-row">
+      <div class="row-left">
+        <div class="row-icon" style="background:#FFF0ED;">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </div>
+        <span class="row-label">同步数据到云端</span>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="setting-row">
+      <div class="row-left">
+        <div class="row-icon" style="background:#FFF0ED;">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+        </div>
+        <span class="row-label">启动单手模式</span>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="setting-row">
+      <div class="row-left">
+        <div class="row-icon" style="background:#F5F0FF;">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+          </svg>
+        </div>
+        <span class="row-label">智能节拍匹配</span>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+  </div>
+
+  <!-- Tab 选项卡 -->
+  <div class="tab-bar">
+    <div class="tab-item" data-tab="start">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M10 8l6 4-6 4V8z" fill="#555" stroke="none"/>
+        </svg>
+      </div>
+      <span class="tab-label">开始</span>
+    </div>
+
+    <div class="tab-item" data-tab="songs">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"/>
+          <circle cx="6" cy="18" r="3"/>
+          <circle cx="18" cy="16" r="3"/>
+        </svg>
+      </div>
+      <span class="tab-label">歌曲列表</span>
+    </div>
+
+    <div class="tab-item" data-tab="curve">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+      </div>
+      <span class="tab-label">曲线</span>
+    </div>
+
+    <div class="tab-item active" data-tab="settings">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <span class="tab-label">设置</span>
+    </div>
+  </div>
+
+  <!-- home indicator -->
+  <div class="home-indicator"></div>
+
+</div>
+
+<script>
+  document.querySelectorAll('.tab-item').forEach(item => {
+    item.addEventListener('click', function() {
+      document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+      document.querySelectorAll('.tab-item').forEach(t => {
+        const svg = t.querySelector('svg');
+        if (!svg) return;
+        const paths = svg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#555'));
+      });
+      const activeSvg = this.querySelector('svg');
+      if (activeSvg) {
+        const paths = activeSvg.querySelectorAll('path, circle, polyline');
+        paths.forEach(p => p.setAttribute('stroke', '#7C3AED'));
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
