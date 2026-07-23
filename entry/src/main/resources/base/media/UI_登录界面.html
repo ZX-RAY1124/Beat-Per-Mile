@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1320, initial-scale=1.0">
+<title>登录 - 界面设计</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f0f2f5;
+    font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+  }
+
+  /* ── 手机外框 ── */
+  .phone {
+    width: 1320px;
+    height: 2856px;
+    background: #ffffff;
+    border-radius: 80px;
+    box-shadow:
+      0 0 0 12px #1a1a2e,
+      0 0 0 14px #2d2d44,
+      0 30px 80px rgba(0,0,0,.35);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 状态栏 ── */
+  .status-bar {
+    height: 80px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 48px;
+    font-size: 28px;
+    font-weight: 600;
+    color: #1a1a2e;
+    flex-shrink: 0;
+    margin-top: 12px;
+  }
+  .status-bar .time { font-weight: 700; }
+  .status-icons { display: flex; gap: 10px; align-items: center; }
+  .status-icons svg { display: block; }
+
+  /* ── 灵动岛 ── */
+  .dynamic-island {
+    width: 320px;
+    height: 58px;
+    background: #1a1a2e;
+    border-radius: 40px;
+    position: absolute;
+    top: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+  }
+
+  /* ── 内容区 ── */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px 80px 30px;
+    position: relative;
+    overflow-y: auto;
+  }
+
+  /* ── 弹性分隔器 ── */
+  .spacer {
+    flex: 1;
+    flex-shrink: 0;
+    width: 100%;
+    min-height: 10px;
+  }
+  .spacer-sm {
+    flex: 0.3;
+    flex-shrink: 0;
+    width: 100%;
+    min-height: 10px;
+  }
+  .spacer-xs {
+    flex: 0.15;
+    flex-shrink: 0;
+    width: 100%;
+    min-height: 8px;
+  }
+
+  /* ========== 大用户图标 ========== */
+  .login-avatar {
+    width: 260px;
+    height: 260px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #A78BFA, #7C3AED);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 12px 40px rgba(124,58,237,.30);
+  }
+  .login-avatar svg {
+    display: block;
+  }
+
+  /* ========== 输入框 ========== */
+  .input-group {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .input-group label {
+    font-size: 32px;
+    font-weight: 500;
+    color: #666;
+    padding-left: 8px;
+  }
+  .input-group .input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 34px 34px;
+    background: #f5f6f8;
+    border-radius: 26px;
+    border: 2px solid transparent;
+    transition: border-color .2s ease, background .2s ease;
+  }
+  .input-group .input-wrap:focus-within {
+    border-color: #7C3AED;
+    background: #faf8ff;
+  }
+  .input-group .input-wrap input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 38px;
+    font-family: inherit;
+    color: #1a1a2e;
+    caret-color: #7C3AED;
+  }
+  .input-group .input-wrap input::placeholder {
+    color: #bbb;
+  }
+  .input-group .input-wrap .input-icon {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  /* ========== 登录按钮 ========== */
+  .login-btn {
+    width: 100%;
+    padding: 42px 0;
+    background: linear-gradient(135deg, #A78BFA, #7C3AED);
+    color: #fff;
+    border: none;
+    border-radius: 30px;
+    font-size: 42px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-top: 24px;
+    transition: opacity .2s ease, transform .15s ease;
+    box-shadow: 0 8px 32px rgba(124,58,237,.30);
+  }
+  .login-btn:hover {
+    opacity: .9;
+  }
+  .login-btn:active {
+    transform: scale(.97);
+  }
+
+  /* ========== 底部链接区 ========== */
+  .login-links {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    flex-shrink: 0;
+  }
+  .login-links a {
+    font-size: 32px;
+    color: #7C3AED;
+    text-decoration: none;
+    font-weight: 500;
+    transition: opacity .2s ease;
+    cursor: pointer;
+  }
+  .login-links a:hover {
+    opacity: .7;
+  }
+  .login-links .divider {
+    width: 2px;
+    height: 24px;
+    background: #ddd;
+  }
+
+  /* ========== 或分割线 ========== */
+  .or-divider {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    width: 100%;
+    margin-top: 36px;
+    flex-shrink: 0;
+  }
+  .or-divider .line {
+    flex: 1;
+    height: 2px;
+    background: #eee;
+  }
+  .or-divider .text {
+    font-size: 28px;
+    color: #bbb;
+    white-space: nowrap;
+  }
+
+  /* ========== 第三方登录 ========== */
+  .social-login {
+    display: flex;
+    gap: 40px;
+    margin-top: 28px;
+    flex-shrink: 0;
+  }
+  .social-login .social-item {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: #f5f6f8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background .2s ease, transform .15s ease;
+  }
+  .social-login .social-item:hover {
+    background: #ede8ff;
+    transform: scale(1.05);
+  }
+
+  /* ── Tab 选项卡 ── */
+  .tab-bar {
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 100px;
+    visibility:hidden;
+
+    padding: 18px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 1100px;
+    flex-shrink: 0;
+    box-shadow:
+      0 8px 48px rgba(0,0,0,.08),
+      inset 0 1px 0 rgba(255,255,255,.6);
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+  }
+
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 12px 16px;
+    border-radius: 40px;
+    transition: background .2s ease;
+    position: relative;
+    min-width: 130px;
+  }
+  .tab-item:hover { background: rgba(124,58,237,.06); }
+  .tab-item.active { background: rgba(124,58,237,.10); }
+
+  .tab-item .tab-icon { display: flex; align-items: center; justify-content: center; }
+  .tab-item .tab-label {
+    font-size: 28px;
+    color: #555;
+    font-weight: 500;
+    transition: color .2s ease;
+  }
+  .tab-item.active .tab-label { color: #7C3AED; font-weight: 600; }
+
+  /* ── 底部指示条 ── */
+  .home-indicator {
+    width: 200px;
+    height: 10px;
+    background: #d0d0d0;
+    border-radius: 20px;
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  @media (max-width: 1400px) {
+    body { transform: scale(.7); transform-origin: center center; }
+  }
+  @media (max-width: 1000px) {
+    body { transform: scale(.48); transform-origin: center center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="phone">
+
+  <!-- 灵动岛 -->
+  <div class="dynamic-island"></div>
+
+  <!-- 状态栏 -->
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <rect x="0" y="12" width="6" height="8" rx="1.5" fill="#1a1a2e"/>
+        <rect x="8" y="7" width="6" height="13" rx="1.5" fill="#1a1a2e"/>
+        <rect x="16" y="3" width="6" height="17" rx="1.5" fill="#1a1a2e"/>
+        <rect x="24" y="0" width="6" height="20" rx="1.5" fill="#1a1a2e" opacity=".3"/>
+      </svg>
+      <svg width="28" height="20" viewBox="0 0 28 20" fill="none">
+        <path d="M14 18.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="#1a1a2e"/>
+        <path d="M9 14a7 7 0 0 1 10 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M4.5 9.5a12 12 0 0 1 19 0" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <svg width="36" height="20" viewBox="0 0 36 20" fill="none">
+        <rect x="0" y="1" width="30" height="18" rx="4" stroke="#1a1a2e" stroke-width="2" fill="none"/>
+        <rect x="3" y="4" width="24" height="12" rx="2" fill="#1a1a2e"/>
+        <rect x="32" y="6" width="4" height="8" rx="2" fill="#1a1a2e"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- 内容 -->
+  <div class="content">
+
+    <div class="spacer"></div>
+
+    <!-- 大用户图标 -->
+    <div class="login-avatar">
+      <svg width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+        <circle cx="12" cy="7" r="4"/>
+      </svg>
+    </div>
+
+    <div class="spacer-sm"></div>
+
+    <!-- 用户名输入框 -->
+    <div class="input-group">
+      <label>用户名</label>
+      <div class="input-wrap">
+        <div class="input-icon">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+        </div>
+        <input type="text" placeholder="请输入用户名">
+      </div>
+    </div>
+
+    <!-- 密码输入框 -->
+    <div class="input-group" style="margin-top:20px;">
+      <label>密码</label>
+      <div class="input-wrap">
+        <div class="input-icon">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </div>
+        <input type="password" placeholder="请输入密码">
+      </div>
+    </div>
+
+    <!-- 登录按钮 -->
+    <button class="login-btn">登 录</button>
+
+    <div class="spacer-xs"></div>
+
+    <!-- 底部链接 -->
+    <div class="login-links">
+      <a>手机验证码登录</a>
+      <a>忘记密码？</a>
+    </div>
+
+    <!-- 分割线 -->
+    <div class="or-divider">
+      <span class="line"></span>
+      <span class="text">其他登录方式</span>
+      <span class="line"></span>
+    </div>
+
+    <!-- 第三方登录 -->
+    <div class="social-login">
+      <div class="social-item">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="#666">
+          <path d="M22.7 12.73c0-.82-.07-1.63-.2-2.42H12v4.58h5.98a5.44 5.44 0 0 1-2.36 3.57v2.97h3.83c2.24-2.06 3.53-5.1 3.53-8.7z"/>
+          <path d="M12 23c3.2 0 5.88-1.06 7.84-2.87l-3.83-2.97c-1.06.71-2.42 1.13-4.01 1.13-3.08 0-5.69-2.08-6.62-4.88H1.43v3.06A11.99 11.99 0 0 0 12 23z"/>
+          <path d="M5.38 14.41a7.16 7.16 0 0 1 0-4.58V6.77H1.43a12 12 0 0 0 0 10.7l3.95-3.06z"/>
+          <path d="M12 4.73c1.74 0 3.3.6 4.53 1.78l3.4-3.4A11.99 11.99 0 0 0 1.43 6.77l3.95 3.06C6.3 6.8 8.92 4.73 12 4.73z"/>
+        </svg>
+      </div>
+      <div class="social-item">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="#666">
+          <path d="M17.93 10.92a5.82 5.82 0 0 0-1.38-.55A4.94 4.94 0 0 0 12 5.25a4.96 4.96 0 0 0-4.55 5.12 4.66 4.66 0 0 0 .02.47 3.56 3.56 0 0 0-1.4.28 3.65 3.65 0 0 0 1.45 7.02h8.8a3.9 3.9 0 0 0 .25-7.79 5.36 5.36 0 0 0 .35-.43zM17.93 10.92c.38.5.6 1.1.6 1.76"/>
+        </svg>
+      </div>
+      <div class="social-item">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+  </div>
+
+  <!-- Tab 选项卡 -->
+  <div class="tab-bar">
+    <div class="tab-item" data-tab="start">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M10 8l6 4-6 4V8z" fill="#555" stroke="none"/>
+        </svg>
+      </div>
+      <span class="tab-label">开始</span>
+    </div>
+
+    <div class="tab-item" data-tab="songs">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"/>
+          <circle cx="6" cy="18" r="3"/>
+          <circle cx="18" cy="16" r="3"/>
+        </svg>
+      </div>
+      <span class="tab-label">歌曲列表</span>
+    </div>
+
+    <div class="tab-item" data-tab="curve">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+      </div>
+      <span class="tab-label">曲线</span>
+    </div>
+
+    <div class="tab-item" data-tab="settings">
+      <div class="tab-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </div>
+      <span class="tab-label">设置</span>
+    </div>
+  </div>
+
+  <!-- home indicator -->
+  <div class="home-indicator"></div>
+
+</div>
+
+</body>
+</html>
