@@ -12,7 +12,7 @@ static napi_value Add(napi_env env, napi_callback_info info)
     napi_value args[2] = {nullptr};
 
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
+ 
     napi_valuetype valuetype0;
     napi_typeof(env, args[0], &valuetype0);
 
