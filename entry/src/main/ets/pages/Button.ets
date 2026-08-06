@@ -19,13 +19,13 @@ export class Center_Button implements Button{
   animator: Ellipse_animation = new Ellipse_animation(100,50);
   constructor(index:number) {
     this.index = index;
-    this.offset_y = 100;
+    this.offset_y = 0;
   }
 
 
   select() : void {
     this.is_select = true;
-    this.offset_y = 1100;
+    this.offset_y = 1000;
     this.button_zoom_x = 8;
     this.button_zoom_y = 8;
     this.animator.onPlay()
@@ -33,7 +33,7 @@ export class Center_Button implements Button{
 
   unselect(): void {
     this.is_select = false;
-    this.offset_y = 100;
+    this.offset_y = 0;
     this.button_zoom_x = 1;
     this.button_zoom_y = 1;
     this.animator.onPause()

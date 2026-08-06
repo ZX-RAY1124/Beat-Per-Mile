@@ -89,7 +89,7 @@ struct Main {
                   .width(40)
                   .height(40)
                   .backgroundColor(Color.Orange)
-                  .offset({ x: this.Button_1.animator.x, y: -this.Button_1.animator.y + 50 })
+                  .offset({ x: this.Button_1.animator.x, y: -this.Button_1.animator.y})
                   .onClick(() => {
                     console.log(this.windowWidth.toString())   //test
                   })
@@ -133,7 +133,7 @@ struct Main {
                   .width(40)
                   .height(40)
                   .backgroundColor(Color.Orange)
-                  .offset({ x: this.Button_2.animator.x, y: -this.Button_2.animator.y + 50 })
+                  .offset({ x: this.Button_2.animator.x, y: -this.Button_2.animator.y})
                   .onClick(() => {
 
                   })
@@ -173,9 +173,10 @@ struct Main {
           }
           .alignSelf(ItemAlign.Baseline)
           .padding({ top: 20 })
-          .position({x:this.gesture_offset, y:"25%"})
+          .position({x:this.gesture_offset, y:"30%"})
           .width(4000)
-          .height('50%')
+          .height('32%')
+          .backgroundColor(Color.Pink)
 
           .gesture(PanGesture({direction: PanDirection.Horizontal})
             .onActionUpdate((event: GestureEvent) => {
@@ -189,8 +190,6 @@ struct Main {
                 }
               })
             })
-
-
 
             .onActionEnd((event: GestureEvent) => {
               this.getUIContext()?.animateTo({curve: curves.springMotion(), duration: 400},() => {
