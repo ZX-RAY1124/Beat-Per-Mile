@@ -96,32 +96,35 @@ exec clang++ \
     "$@"                               # ⑦ 透传用户参数
 ```
 
-| 参数                           | 含义            | 为什么需要                            |
-|------------------------------|---------------|----------------------------------|
-| --target=aarch64-linux-ohos	 | 告诉编译器目标不是宿主机	 | 不设就编译出 x86_64 的代码                |
-| --sysroot                    | 	系统头文件和库的根目录  | 	找不到 stdio.h、libc.so 等系统基础库      |
-| -rtlib=compiler-rt           | 	避免依赖 libgcc  | 	HarmonyOS 用 musl libc，没有 libgcc |
-| -stdlib=libc++	              | C++ 标准库实现	    | HarmonyOS NDK 提供的是 libc++        |
-| -fuse-ld=lld	                | 使用 LLVM 链接器	  | GNU ld 不认识 OHOS 格式               |
+| 参数                             | 含义            | 为什么需要                            |
+|--------------------------------|---------------|----------------------------------|
+| `--target=aarch64-linux-ohos`	 | 告诉编译器目标不是宿主机	 | 不设就编译出 x86_64 的代码                |
+| `--sysroot`                    | 	系统头文件和库的根目录  | 	找不到 `stdio.h`、`libc.so` 等系统基础库  |
+| `-rtlib=compiler-rt`           | 	避免依赖 libgcc  | 	HarmonyOS 用 musl libc，没有 libgcc |
+| `-stdlib=libc++`	              | C++ 标准库实现	    | HarmonyOS NDK 提供的是 libc++        |
+| `-fuse-ld=lld`	                | 使用 LLVM 链接器	  | GNU ld 不认识 OHOS 格式               |
+
 通用编译参数
 `CFLAGS="-fPIC -D__MUSL__=1 -O3 -I${PREFIX}/include"`
 
-| 参数           | 	含义                             |
-|--------------|---------------------------------|
-| -fPIC        | 	位置无关代码（动态库必需）                  |
-| -D__MUSL__=1 | 	告诉代码"我们在 musl libc 上运行"，触发兼容分支 |
-| -O3	         | 最高优化级别                          |
-| -I/path	     | 头文件搜索路径                         |
-| -L/path	     | 库文件搜索路径（链接阶段）                   |
+| 参数             | 	含义                             |
+|----------------|---------------------------------|
+| `-fPIC `       | 	位置无关代码（动态库必需）                  |
+| `-D__MUSL__=1` | 	告诉代码"我们在 musl libc 上运行"，触发兼容分支 |
+| `-O3`	         | 最高优化级别                          |
+| `-I/path`      | 头文件搜索路径                         |
+| `-L/path`	     | 库文件搜索路径（链接阶段）                   |
+
 Autotools 特有参数
 `./configure --host=aarch64-unknown-linux-gnu --prefix=${PREFIX}`
 
-| 参数               | 	含义                        |
-|------------------|----------------------------|
-| --host=三元组	      | 告诉 configure 这是交叉编译，目标机器架构 |
-| --prefix	        | make install 装到哪里          |
-| --enable-shared  | 	编译动态库 (.so)               |
-| --disable-static | 	不编译静态库 (.a)               |
+| 参数                 | 	含义                        |
+|--------------------|----------------------------|
+| `--host=三元组`	      | 告诉 configure 这是交叉编译，目标机器架构 |
+| `--prefix`	        | make install 装到哪里          |
+| `--enable-shared`  | 	编译动态库 (.so)               |
+| `--disable-static` | 	不编译静态库 (.a)               |
+
 **--host 的三元组格式：**
 ```
 aarch64-unknown-linux-gnu
@@ -159,12 +162,13 @@ sed -i                       # in-place 编辑（直接修改文件）
     libtool                  # 要修改的文件名
 ```
 
-| 语法元素       | 	含义                         |
-|------------|-----------------------------|
-| sed        | 	Stream Editor，流编辑器         |
-| -i	        | 直接修改文件（in-place）            |
-| s/查找/替换/g	 | 正则替换，g = global（全部替换，不只第一个） |
-| ;	         | 分隔多个 sed 命令                 |
+| 语法元素         | 	含义                           |
+|--------------|-------------------------------|
+| `sed`        | 	Stream Editor，流编辑器           |
+| `-i`	        | 直接修改文件（in-place）              |
+| `s/查找/替换/g`	 | 正则替换，`g` = global（全部替换，不只第一个） |
+| `;`	         | 分隔多个 sed 命令                   |
+
 验证是否改干净
 ```
 grep 'lgcc' libtool
@@ -174,41 +178,41 @@ grep 'lgcc' libtool
 ## 5. 常用排查命令速查表
 **文件分析**    
 
-| 命令                | 	作用                | 	示例                               |
-|-------------------|--------------------|-----------------------------------|
-| file xxx.so	      | 查看文件类型和架构	         | file libessentia.so → ARM aarch64 |
-| readelf -d xxx.so | 	查看动态链接依赖（NEEDED）	 | 确认链接了哪些 so                        |
-| readelf -h xxx.so | 	查看 ELF 头（机器类型）	   | 确认是 AArch64 还是 x86-64             |
-| ldd xxx.so        | 	查看运行时依赖	          | 只能在目标平台运行                         |
-| ls -la	           | 查看符号链接	            | libavcodec.so → libavcodec.so.58  |
+| 命令                  | 	作用                | 	示例                                 |
+|---------------------|--------------------|-------------------------------------|
+| `file xxx.so`	      | 查看文件类型和架构	         | `file libessentia.so` → ARM aarch64 |
+| `readelf -d xxx.so` | 	查看动态链接依赖（NEEDED）	 | 确认链接了哪些 so                          |
+| `readelf -h xxx.so` | 	查看 ELF 头（机器类型）	   | 确认是 AArch64 还是 x86-64               |
+| `ldd xxx.so`        | 	查看运行时依赖	          | 只能在目标平台运行                           |
+| `ls -la`	           | 查看符号链接	            | `libavcodec.so → libavcodec.so.58`  |
 
 **文本搜索**
 
-| 命令                         | 	作用       | 	示例                             |
-|----------------------------|-----------|---------------------------------|
-| grep -rn "关键词" 目录	         | 递归搜索文本    | 	grep -rn "msse" src/           |         
-| grep -rn --include="*.py"	 | 限定文件类型    | 	只在 Python 文件里搜                 |                  
-| head -30 文件	               | 看文件前 30 行 | 	head -30 config.log            |
-| tail -40 文件	               | 看文件后 40 行 | 	看编译日志尾部                        |
-| cat -A 文件	                 | 显示隐藏字符    | 	检查是否有 Windows 换行 ^M            |
-| find 目录 -name "*.h"        | 	按文件名查找   | 	find include -name "fileref.h" | 
+| 命令                           | 	作用       | 	示例                               |
+|------------------------------|-----------|-----------------------------------|
+| `grep -rn "关键词" 目录`	         | 递归搜索文本    | 	`grep -rn "msse" src/`           |         
+| `grep -rn --include="*.py"`	 | 限定文件类型    | 	只在 Python 文件里搜                   |                  
+| `head -30 文件`	               | 看文件前 30 行 | 	`head -30 config.log `           |
+| `tail -40 文件`	               | 看文件后 40 行 | 	看编译日志尾部                          |
+| `cat -A 文件`	                 | 显示隐藏字符    | 	检查是否有 Windows 换行 `^M`            |
+| `find 目录 -name "*.h"`        | 	按文件名查找   | 	`find include -name "fileref.h"` | 
 
 **编译调试**
 
-| 命令                          | 	作用                    | 	示例        |
-|-----------------------------|------------------------|------------|
-| make -j$(nproc) 2>&1        | tee build.log	编译并保存日志	 | 出错后可以 grep |
-| make -n	                    | 干跑（只打印命令不执行）	          | 检查链接参数是否正确 |
-| pkg-config --cflags taglib	 | 查询库的编译参数	确认 include 路径 |
-| pkg-config --libs taglib	   | 查询库的链接参数	确认 -L 和 -l    |
+| 命令                                      | 	作用           | 	示例           |
+|-----------------------------------------|---------------|---------------|
+| `make -j$(nproc) 2>&1 \| tee build.log` | 	编译并保存日志	     | 出错后可以 grep    |
+| `make -n`	                              | 干跑（只打印命令不执行）	 | 检查链接参数是否正确    |
+| `pkg-config --cflags taglib`	           | 查询库的编译参数	     | 确认 include 路径 |
+| `pkg-config --libs taglib`	             | 查询库的链接参数	     | 确认 -L 和 -l    |
 
 **环境与路径**
 
-| 命令                          | 	作用            |
-|-----------------------------|----------------|
-| echo ${INSTALL_PREFIX}      | 	确认变量值         |
-| which clang++               | 	找编译器位置        |
-| ls ${PREFIX}/lib/pkgconfig/ | 	查看已安装的 .pc 文件 |
+| 命令                            | 	作用            |
+|-------------------------------|----------------|
+| `echo ${INSTALL_PREFIX}`      | 	确认变量值         |
+| `which clang++`               | 	找编译器位置        |
+| `ls ${PREFIX}/lib/pkgconfig/` | 	查看已安装的 .pc 文件 |
 
 ## 6. 完整编译流程总结
 ### 6.1 总体思路
@@ -280,16 +284,16 @@ make -j$(nproc) && make install
 ```
 ## 7. 常见坑与解决方案
 
-| 坑                                    | 	原因                            | 	解决                                             |
-|--------------------------------------|--------------------------------|-------------------------------------------------|
-| "could not configure a C++ compiler" | 	waf 在宿主机上运行交叉编译出的测试程序，运行失败    | 	用环境变量 CXX= 而非 --check-cxx-compiler             |
-| "unknown FP unit 'sse'"              | 	waf 自动加了 x86 的 -msse 到 ARM 编译 | 	--no-msse 或设 -march=armv8-a                    |
-| fileref.h 找不到                        | 	TagLib 的头文件在子目录               | 	CFLAGS 加 -I${PREFIX}/include/taglib            |
-| -lfftw3f 找不到                         | 	so 文件名带版本号（.so.3）             | 	CMakeLists.txt 用完整路径                           |
-| 模拟器安装失败 (code 9568347)               | 	模拟器 x86_64，so 是 arm64         | 	编译 x86_64 版本或改 abiFilters                      |
-| libc++ time_t unresolved             | 	musl libc 与 libc++ 的类型兼容问题    | 	add_compile_definitions(_LIBCPP_HAS_MUSL_LIBC) |
-| FFmpeg 版本混淆（.58 vs .60）              | 	装过两个版本的 FFmpeg                | 	Essentia 需要 FFmpeg 4.4（有 avresample）           |
-| sed 修改 libtool 无效                    | 	make clean 后 libtool 被重置	     | ./configure 之后、make 之前执行 sed                    |
+| 坑                                    | 	原因                              | 	解决                                               |
+|--------------------------------------|----------------------------------|---------------------------------------------------|
+| "could not configure a C++ compiler" | 	waf 在宿主机上运行交叉编译出的测试程序，运行失败      | 	用环境变量 `CXX=` 而非 `--check-cxx-compiler`           |
+| "unknown FP unit 'sse'"              | 	waf 自动加了 x86 的` -msse `到 ARM 编译 | 	`--no-msse` 或设 `-march=armv8-a `                 |
+| `fileref.h` 找不到                      | 	TagLib 的头文件在子目录                 | 	CFLAGS 加 `-I${PREFIX}/include/taglib`            |
+| `-lfftw3f` 找不到                       | 	so 文件名带版本号（`.so.3`）             | 	CMakeLists.txt 用完整路径                             |
+| 模拟器安装失败 (code 9568347)               | 	模拟器 x86_64，so 是 arm64           | 	编译 x86_64 版本或改 `abiFilters `                     |
+| libc++ `time_t` unresolved           | 	musl libc 与 libc++ 的类型兼容问题      | 	`add_compile_definitions(_LIBCPP_HAS_MUSL_LIBC)` |
+| FFmpeg 版本混淆（.58 vs .60）              | 	装过两个版本的 FFmpeg                  | 	Essentia 需要 FFmpeg 4.4（有 avresample）             |
+| sed 修改 libtool 无效                    | 	`make clean` 后 libtool 被重置	     | `./configure` 之后、make 之前执行 sed                    |
 
 *附录：快速启动脚本*
 下次从头编译 `arm64-v8a`，可以把这个保存为 `build_all.sh`：
