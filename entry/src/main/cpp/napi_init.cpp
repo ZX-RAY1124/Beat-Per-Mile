@@ -1,4 +1,5 @@
 #include "napi/native_api.h"
+#include "essentia/essentia.h"
 
 // 暂时不引用 essentia，先验证编译链路没问题
 // #include "essentia/essentia.h"

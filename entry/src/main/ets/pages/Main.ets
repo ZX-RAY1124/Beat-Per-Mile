@@ -1,5 +1,5 @@
 import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
-import { Center_Button } from './Button';
+import { Center_Button } from '../ets_libs/Button';
 import { curves, EllipseShape } from '@kit.ArkUI';
 import { window } from '@kit.ArkUI'
 import lottie, { AnimationItem } from '@ohos/lottie';
