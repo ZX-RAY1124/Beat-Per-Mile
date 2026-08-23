@@ -22,15 +22,24 @@ set(PREBUILT_LIBS ${NATIVERENDER_ROOT_PATH}/libs/${OHOS_ARCH})
 
 add_library(entry SHARED napi_init.cpp)
 
+if(OHOS_ARCH STREQUAL "arm64-v8a")
+    set(FFTW_LIB ${PREBUILT_LIBS}/libfftw3f.so.3.6.9)
+else()
+    set(FFTW_LIB ${PREBUILT_LIBS}/libfftw3f.so.3)
+endif()
+
+
+
 target_link_libraries(entry PUBLIC
     libace_napi.z.so
     libhilog_ndk.z.so
     ${PREBUILT_LIBS}/libessentia.so
-    ${PREBUILT_LIBS}/libfftw3f.so.3
+    ${FFTW_LIB}
     ${PREBUILT_LIBS}/libavformat.so.58
     ${PREBUILT_LIBS}/libavcodec.so.58
     ${PREBUILT_LIBS}/libavutil.so.56
     ${PREBUILT_LIBS}/libavresample.so.4
+    ${PREBUILT_LIBS}/libswresample.so.3
     ${PREBUILT_LIBS}/libsamplerate.so.0
     ${PREBUILT_LIBS}/libtag.so.2
     ${PREBUILT_LIBS}/libyaml-0.so.2

@@ -3,6 +3,11 @@ import { Center_Button } from '../ets_libs/Button';
 import { curves, EllipseShape } from '@kit.ArkUI';
 import { window } from '@kit.ArkUI'
 import lottie, { AnimationItem } from '@ohos/lottie';
+import * as entry from 'libentry.so';
+
+console.log('模块对象='+JSON.stringify(entry));
+console.log('模块对象是否为undefined = ' + (entry === undefined));
+
 
 @Preview
 @Component
@@ -185,6 +190,9 @@ struct Main {
 
                 if(this.gesture_offset > 0){
                   console.log("正在右滑" + this.gesture_offset.toString())
+
+                  console.log(entry.add(2,3).toString());
+
                 } else if (this.gesture_offset < 0){
                   console.log("正在左滑" + this.gesture_offset.toString())
                 }
