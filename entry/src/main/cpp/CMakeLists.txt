@@ -6,21 +6,16 @@ set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 # ⚠️ 核心修复：让 libc++ 在 musl 环境下正确处理 time_t
 add_compile_definitions(_LIBCPP_HAS_MUSL_LIBC)
 
+# 只保留父级 include 目录，第三方头文件统一用子目录前缀引用（如 libavutil/xxx.h）。
+# 切勿把 libavutil 等子目录单独加入 -I，否则其中的 time.h 会遮蔽 musl 的 <time.h>，
+# 导致 <ctime> 里的 time_t / nanosleep 无法解析（system_clock.h 编译报错）。
 include_directories(
     ${NATIVERENDER_ROOT_PATH}/include
-    ${NATIVERENDER_ROOT_PATH}/include/essentia
-    ${NATIVERENDER_ROOT_PATH}/include/taglib
-    ${NATIVERENDER_ROOT_PATH}/include/libavutil
-    ${NATIVERENDER_ROOT_PATH}/include/libavcodec
-    ${NATIVERENDER_ROOT_PATH}/include/libavformat
-    ${NATIVERENDER_ROOT_PATH}/include/libavresample
-    ${NATIVERENDER_ROOT_PATH}/include/libswresample
-    ${NATIVERENDER_ROOT_PATH}/include/libswscale
 )
 
 set(PREBUILT_LIBS ${NATIVERENDER_ROOT_PATH}/libs/${OHOS_ARCH})
 
-add_library(entry SHARED napi_init.cpp)
+add_library(entry SHARED napi_init.cpp test_audio.h test_audio.cpp)
 
 if(OHOS_ARCH STREQUAL "arm64-v8a")
     set(FFTW_LIB ${PREBUILT_LIBS}/libfftw3f.so.3.6.9)
@@ -31,6 +26,8 @@ endif()
 
 
 target_link_libraries(entry PUBLIC
+    c++_static
+    c++abi
     libace_napi.z.so
     libhilog_ndk.z.so
     ${PREBUILT_LIBS}/libessentia.so

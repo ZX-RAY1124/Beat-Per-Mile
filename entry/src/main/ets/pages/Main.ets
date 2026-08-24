@@ -191,7 +191,6 @@ struct Main {
                 if(this.gesture_offset > 0){
                   console.log("正在右滑" + this.gesture_offset.toString())
 
-                  console.log(entry.add(2,3).toString());
 
                 } else if (this.gesture_offset < 0){
                   console.log("正在左滑" + this.gesture_offset.toString())
