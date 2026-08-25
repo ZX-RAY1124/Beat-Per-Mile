@@ -7,7 +7,7 @@ import * as entry from 'libentry.so';
 
 console.log('模块对象='+JSON.stringify(entry));
 console.log('模块对象是否为undefined = ' + (entry === undefined));
-console.log(entry.test_audio("aaaaaa"));
+console.log(entry.test_audio("test_audio"));
 
 @Preview
 @Component

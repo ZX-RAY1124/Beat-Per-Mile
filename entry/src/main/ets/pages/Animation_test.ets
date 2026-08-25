@@ -32,7 +32,7 @@ struct Animation_test{
       loop: true,
       autoplay: true,
       name: this.animation_Name,
-      path: 'common/lottie/test_Animation.json',
+      path: 'lottie/test_Animation.json',
       frameRate: 30,
       initialSegment: [0, 0],
       contentMode: 'Contain'
