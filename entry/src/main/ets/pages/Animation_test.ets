@@ -34,7 +34,6 @@ struct Animation_test{
       name: this.animation_Name,
       path: 'lottie/test_Animation.json',
       frameRate: 30,
-      initialSegment: [0, 0],
       contentMode: 'Contain'
     });
 
@@ -71,8 +70,8 @@ struct Animation_test{
       Column(){
 
         Canvas(this.context)
-          .width('100%')
-          .height('100%')
+          .width('80%')
+          .height('80%')
           .onReady(() => {
             // Canvas 组件就绪后才可加载动画
             this.initAnimation();
@@ -80,6 +79,7 @@ struct Animation_test{
           .onDisAppear(() => {
             this.destroy_ani();
           })
+          .backgroundColor("#fff69999")
 
 
 
