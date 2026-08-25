@@ -8,7 +8,7 @@
 
 test_audio::test_audio() : name("dev") {}
 
-std::string test_audio::make_name(std::string name) {
+void test_audio::make_name(std::string name) {
     this->name = name;
 }
 

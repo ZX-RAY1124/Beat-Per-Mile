@@ -13,7 +13,7 @@ private:
     std::string name;
 public:
     test_audio();
-    std::string make_name(std::string name);
+    void make_name(std::string name);
     std::string get_name();
 };
 

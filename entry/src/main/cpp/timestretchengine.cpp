@@ -23,7 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include "signalsmith-stretch.h"   // 确保包含路径正确
+#include "signalsmith_stretch.h"   // 确保包含路径正确
 
 // ============================================================================
 // 1. 环形缓冲区 (Ring Buffer)

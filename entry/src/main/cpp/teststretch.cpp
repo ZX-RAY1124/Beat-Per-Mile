@@ -5,7 +5,7 @@
  * 功能：将 input.wav 变速为 1.5 倍，输出到 output.wav
  */
 
-#include "TimeStretchEngine.cpp"
+#include "timestretchengine.cpp"
 #include <fstream>
 #include <iostream>
 #include <vector>
