@@ -209,34 +209,30 @@ public:
      * @param initialSpeed   初始变速比 (1.0 = 原速)
      */
     TimeStretchEngine(int channels, int sampleRate, int ringBufferSize, double initialSpeed = 1.0)
-        : channels_(channels)
-        , sampleRate_(sampleRate)
-        , speed_(initialSpeed)
-        , ringBuffer_(channels, ringBufferSize)
-        , isFinished_(false)
-        , hasPreheated_(false)
-        , inputLatency_(0)
-        , outputLatency_(0)
-    {
-        // 配置 stretcher
-        stretcher_.presetDefault(channels, sampleRate);
-        // 可选：调整参数（比如窗口大小等），这里用默认值
+    : channels_(channels)
+    , sampleRate_(sampleRate)
+    , speed_(initialSpeed)
+    , ringBuffer_(channels, ringBufferSize)
+    , isFinished_(false)
+    , hasPreheated_(false)
+    , inputLatency_(0)
+    , outputLatency_(0)
+{
+    stretcher_.presetDefault(channels, sampleRate);
+    inputLatency_ = static_cast<int>(stretcher_.inputLatency());
+    outputLatency_ = static_cast<int>(stretcher_.outputLatency());
 
-        // 获取延迟信息
-        inputLatency_ = static_cast<int>(stretcher_.inputLatency());
-        outputLatency_ = static_cast<int>(stretcher_.outputLatency());
+    // 设置最大输入块大小：使用环形缓冲区容量的一半，保证不会一次读太多
+    maxInputFrames_ = ringBufferSize / 2;
+    if (maxInputFrames_ < 256) maxInputFrames_ = 256; // 最小值
 
-        // 预分配临时缓冲区，避免反复分配
-        // 最大输入块大小：根据 maxInputFrameCount() 决定
-        maxInputFrames_ = static_cast<int>(stretcher_.maxInputFrameCount());
-        tempInput_.resize(channels);
-        for (int ch = 0; ch < channels; ++ch) {
-            tempInputBuffers_[ch].resize(maxInputFrames_);
-            tempInput_[ch] = tempInputBuffers_[ch].data();
-        }
-        // 输出缓冲区临时用外部传入的，因此不预分配
+    tempInput_.resize(channels);
+    tempInputBuffers_.resize(channels);
+    for (int ch = 0; ch < channels; ++ch) {
+        tempInputBuffers_[ch].resize(maxInputFrames_ + inputLatency_ + 64); // 额外余量
+        tempInput_[ch] = tempInputBuffers_[ch].data();
     }
-
+}
     ~TimeStretchEngine() = default;
 
     // 禁止拷贝
@@ -302,19 +298,16 @@ public:
         // 变速比 speed_ 下，要得到 outputFrames 输出，理论上需要 inputFrames = outputFrames * speed_
         // 但还要考虑 stretcher 内部的延迟，所以我们加一些余量，并保证不超过 maxInputFrames_
         int neededInput = static_cast<int>(std::ceil(outputFrames * speed_)) + inputLatency_;
+    // 限制最大输入
         if (neededInput > maxInputFrames_) {
-            // 如果太大，减少输出帧数（或者分块处理，这里简化：限制输入大小）
-            // 重新计算输出帧数
+        // 重新计算可用的输出帧数
             int maxOutput = static_cast<int>((maxInputFrames_ - inputLatency_) / speed_);
             if (maxOutput < 1) maxOutput = 1;
-            if (outputFrames > maxOutput) {
-                outputFrames = maxOutput;
-                neededInput = maxInputFrames_;
-            }
+            outputFrames = maxOutput;
+            neededInput = maxInputFrames_;
         }
 
-        // ---- 3. 从环形缓冲区读取数据 ----
-        // 如果读不够，补零，但记录实际读取帧数
+    // 从环形缓冲区读取...
         int actualRead = ringBuffer_.read(tempInput_.data(), neededInput);
         if (actualRead < neededInput) {
             // 数据不足，用零填充剩余

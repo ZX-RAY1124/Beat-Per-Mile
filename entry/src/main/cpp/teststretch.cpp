@@ -1,17 +1,23 @@
 /*
- * test_cli.cpp - 命令行 WAV 变速测试
- * 编译：g++ -std=c++11 -O2 test_cli.cpp -o test_cli
- * 运行：./test_cli input.wav output.wav 1.5
+ * test_cli.cpp - 命令行 WAV 变速测试（修复版）
+ * 编译：g++ -std=c++11 -O2 teststretch.cpp -o teststretch.exe
+ * 运行：./teststretch.exe input.wav output.wav 1.5
  * 功能：将 input.wav 变速为 1.5 倍，输出到 output.wav
  */
 
-#include "timestretchengine.cpp"
+#include "TimeStretchEngine.cpp"   // 确保该文件已按下方说明修改
 #include <fstream>
 #include <iostream>
 #include <vector>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+
+// ==================== 自定义 clamp（兼容 C++11） ====================
+template<typename T>
+T clamp(T value, T minVal, T maxVal) {
+    return std::max(minVal, std::min(value, maxVal));
+}
 
 // ==================== 简易 WAV 读写（仅支持 PCM 16bit） ====================
 struct WavHeader {
@@ -42,7 +48,7 @@ bool readWav(const std::string& filename, std::vector<float>& left, std::vector<
     }
     sampleRate = header.sampleRate;
     int channels = header.numChannels;
-    int totalSamples = header.subchunk2Size / (channels * 2); // 每声道样本数
+    int totalSamples = header.subchunk2Size / (channels * 2);
 
     std::vector<int16_t> buffer(totalSamples * channels);
     file.read(reinterpret_cast<char*>(buffer.data()), header.subchunk2Size);
@@ -55,7 +61,7 @@ bool readWav(const std::string& filename, std::vector<float>& left, std::vector<
         if (channels == 2)
             right[i] = buffer[i * channels + 1] / 32768.0f;
         else
-            right[i] = left[i]; // 单声道复制到右声道
+            right[i] = left[i];
     }
     return true;
 }
@@ -86,8 +92,8 @@ bool writeWav(const std::string& filename, const std::vector<float>& left, const
 
     std::vector<int16_t> buffer(totalFrames * 2);
     for (int i = 0; i < totalFrames; ++i) {
-        buffer[i * 2] = static_cast<int16_t>(std::clamp(left[i], -1.0f, 1.0f) * 32767);
-        buffer[i * 2 + 1] = static_cast<int16_t>(std::clamp(right[i], -1.0f, 1.0f) * 32767);
+        buffer[i * 2] = static_cast<int16_t>(clamp(left[i], -1.0f, 1.0f) * 32767);
+        buffer[i * 2 + 1] = static_cast<int16_t>(clamp(right[i], -1.0f, 1.0f) * 32767);
     }
     file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size() * sizeof(int16_t));
     file.close();
@@ -108,6 +114,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // ---------- 读取输入 ----------
     std::vector<float> left, right;
     int sampleRate;
     if (!readWav(inputFile, left, right, sampleRate)) {
@@ -116,32 +123,30 @@ int main(int argc, char* argv[]) {
     }
     int totalFrames = left.size();
     std::cout << "输入: " << totalFrames << " 帧, " << sampleRate << " Hz, 立体声" << std::endl;
+    // 打印前几个样本验证
+    std::cout << "输入前10个样本 (左): ";
+    for (int i = 0; i < 10 && i < totalFrames; ++i) std::cout << left[i] << " ";
+    std::cout << std::endl;
 
-    // 计算输出帧数（约）
-    int outputFrames = static_cast<int>(totalFrames / speed);
+    // ---------- 计算输出帧数（多留余量） ----------
+    int outputFrames = static_cast<int>(totalFrames / speed) + 4096;
     std::vector<float> outLeft(outputFrames), outRight(outputFrames);
 
-    // 创建引擎
-    const int RING_SIZE = 8192;
+    // ---------- 创建引擎（环形缓冲区大小 = 文件总帧数 + 安全余量） ----------
+    const int RING_SIZE = totalFrames + 4096;   // 确保能容纳整个文件
+    std::cout << "环形缓冲区容量: " << RING_SIZE << " 帧" << std::endl;
     TimeStretchEngine engine(2, sampleRate, RING_SIZE, speed);
 
-    // 喂入所有数据（可分块，这里简单一次性喂入，但需考虑环形缓冲区容量，可循环喂）
-    const int CHUNK = 1024;
-    int fed = 0;
-    while (fed < totalFrames) {
-        int chunk = std::min(CHUNK, totalFrames - fed);
-        const float* input[2] = { left.data() + fed, right.data() + fed };
-        int written = engine.feedAudio(input, chunk);
-        if (written != chunk) {
-            std::cerr << "警告: 写入环形缓冲区失败（可能溢出，但已处理）" << std::endl;
-        }
-        fed += chunk;
-        std::cout << "\r喂入进度: " << fed << "/" << totalFrames << std::flush;
+    // ---------- 一次性喂入全部数据（不再分块，避免丢弃） ----------
+    const float* input[2] = { left.data(), right.data() };
+    int written = engine.feedAudio(input, totalFrames);
+    std::cout << "实际写入环形缓冲区: " << written << " / " << totalFrames << " 帧" << std::endl;
+    if (written < totalFrames) {
+        std::cerr << "警告：未能写入全部数据（可能缓冲区仍不够大）" << std::endl;
     }
-    std::cout << std::endl;
-    engine.finish();
+    engine.finish();   // 标记输入结束
 
-    // 逐块处理输出
+    // ---------- 逐块处理输出 ----------
     int outPos = 0;
     const int OUT_CHUNK = 512;
     std::vector<float> tempL(OUT_CHUNK), tempR(OUT_CHUNK);
@@ -150,22 +155,36 @@ int main(int argc, char* argv[]) {
         int request = std::min(OUT_CHUNK, remaining);
         float* output[2] = { tempL.data(), tempR.data() };
         int produced = engine.process(output, request);
-        if (produced == 0) break; // 结束
-        // 复制到结果数组
+        if (produced == 0) {
+            std::cout << "process 返回 0，已无更多数据" << std::endl;
+            break;
+        }
+        // 检查输出振幅（调试用）
+        float maxAmp = 0.0f;
+        for (int i = 0; i < produced; ++i) {
+            maxAmp = std::max(maxAmp, std::fabs(tempL[i]));
+            maxAmp = std::max(maxAmp, std::fabs(tempR[i]));
+        }
+        if (maxAmp > 0.001f) {
+            std::cout << "\r处理进度: " << outPos << "/" << outputFrames
+                      << " 当前振幅: " << maxAmp << "   " << std::flush;
+        } else {
+            std::cout << "\r处理进度: " << outPos << "/" << outputFrames << " (静音块)" << std::flush;
+        }
+
         int copy = std::min(produced, remaining);
         std::copy(tempL.begin(), tempL.begin() + copy, outLeft.begin() + outPos);
         std::copy(tempR.begin(), tempR.begin() + copy, outRight.begin() + outPos);
         outPos += copy;
-        std::cout << "\r处理进度: " << outPos << "/" << outputFrames << std::flush;
     }
     std::cout << std::endl;
     std::cout << "实际输出帧数: " << outPos << std::endl;
 
-    if (outPos < outputFrames) {
-        outLeft.resize(outPos);
-        outRight.resize(outPos);
-    }
+    // 裁剪到实际输出大小
+    outLeft.resize(outPos);
+    outRight.resize(outPos);
 
+    // ---------- 写出结果 ----------
     if (!writeWav(outputFile, outLeft, outRight, sampleRate)) {
         std::cerr << "写入输出文件失败" << std::endl;
         return 1;
