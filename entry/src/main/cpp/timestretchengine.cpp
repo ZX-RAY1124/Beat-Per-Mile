@@ -225,7 +225,8 @@ public:
 
         // ---- 正常处理 ----
         // 关键修复：按比例消耗输入，不再额外加 inputLatency_
-        int neededInput = static_cast<int>(std::ceil(outputFrames * speed_));
+        double currentSpeed = speed_.load(std::memory_order_relaxed);
+        int neededInput = static_cast<int>(std::ceil(outputFrames * currentSpeed));
         if (neededInput > maxInputFrames_) {
             int maxOutput = static_cast<int>(maxInputFrames_ / speed_);
             if (maxOutput < 1) maxOutput = 1;
@@ -247,10 +248,10 @@ public:
 
     void setSpeed(double speed) {
         if (speed < 0.01) speed = 0.01;
-        speed_ = speed;
+        speed_.store(speed, std::memory_order_relaxed);
     }
 
-    double getSpeed() const { return speed_; }
+    double getSpeed() const { return speed_.load(std::memory_order_relaxed); }
 
     void reset() {
         ringBuffer_.reset();
@@ -271,7 +272,7 @@ public:
 private:
     int channels_;
     int sampleRate_;
-    double speed_;
+    std::atomic<double> speed_;
     AudioRingBuffer<float> ringBuffer_;
 
     signalsmith::stretch::SignalsmithStretch<float> stretcher_;
