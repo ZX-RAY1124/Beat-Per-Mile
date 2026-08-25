@@ -34,7 +34,6 @@ struct Animation_test{
       name: this.animation_Name,
       path: 'lottie/test_Animation.json',
       frameRate: 30,
-      initialSegment: [0, 0],
       contentMode: 'Contain'
     });
 
