@@ -9,6 +9,11 @@
       "name": "Animation_test_Page",
       "pageSourceFile": "src/main/ets/pages/Animation_test.ets",
       "buildFunction": "load"
+    },
+    {
+      "name": "Audio_test_page",
+      "pageSourceFile": "src/main/ets/pages/audio_play_test.ets",
+      "buildFunction": "load"
     }
   ]
 }

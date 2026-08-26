@@ -77,10 +77,18 @@ struct Main {
 
 
             Column() {
-              Button("测试Lottie动画").height(40).width(120).onClick(() => { //测试用，记得删掉
-                this.navPathStack.pushPathByName('Animation_test_Page', null, true)
-                console.info('ButtonType.Normal');
-              }).offset({ y: -200 })
+              Row() {
+                Button("测试Lottie动画").height(40).width(120).onClick(() => { //测试用，记得删掉
+                  this.navPathStack.pushPathByName('Animation_test_Page', null, true)
+                  console.info('ButtonType.Normal');
+                }).offset({ y: -200 })
+
+                Button("测试音频播放").height(40).width(120).onClick(() => { //测试用，记得删掉
+                  this.navPathStack.pushPathByName('Audio_test_page', null, true)
+                  console.info('ButtonType.Normal');
+                }).offset({ y: -200 })
+              }
+
               Text('主屏幕')
                 .fontSize(28)
                 .fontWeight(FontWeight.Bold)
@@ -228,7 +236,9 @@ struct Main {
             .alignItems(HorizontalAlign.Center)
           }
         }.tabBar("11111")
+
       }.barPosition(BarPosition.End)
+      .barOverlap(true)     //设置悬浮开关
       .barFloatingStyle(
         {
           adaptToHandedness: true,
