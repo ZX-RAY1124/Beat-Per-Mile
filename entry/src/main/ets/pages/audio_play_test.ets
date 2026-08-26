@@ -189,7 +189,7 @@ async function release(context: common.UIAbilityContext) {
       }
     });
     // 关闭沙箱文件。
-    await context.resourceManager.closeRawFd('S16LE_2_48000.pcm');
+    await context.resourceManager.closeRawFd('credit.wav');
   }
 }
 
