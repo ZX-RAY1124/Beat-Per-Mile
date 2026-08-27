@@ -125,6 +125,11 @@ public:
         return static_cast<int>(w - r);
     }
 
+    // 已读出的帧数（读位置），即已被消费的输入帧数
+    size_t readPosition() const {
+        return readPos_.load(std::memory_order_relaxed);
+    }
+
     void reset() {
         readPos_.store(0, std::memory_order_relaxed);
         writePos_.store(0, std::memory_order_relaxed);
@@ -252,6 +257,15 @@ public:
     }
 
     double getSpeed() const { return speed_.load(std::memory_order_relaxed); }
+
+    /**
+     * @brief 已实际消耗的输入帧数（精确值，非估算）。
+     *        等于环形缓冲区的读位置：每次 process() 真实读取了多少输入帧。
+     *        用于上层实现播放进度显示。
+     */
+    int inputConsumed() const {
+        return static_cast<int>(ringBuffer_.readPosition());
+    }
 
     void reset() {
         ringBuffer_.reset();

@@ -110,6 +110,11 @@ public:
     void loadAudio(const float* data, int totalFrames) {
         stop(); // 先停止播放
 
+        // 保留源数据指针，供 seekTo() 重新喂入使用（借用指针，调用方须保持数据存活）
+        sourceData_ = data;
+        sourceFrames_ = totalFrames;
+        seekOffset_ = 0;
+
         // 构建指针数组（平面格式）
         std::vector<const float*> channelPtrs(channels_);
         if (channels_ == 2) {
@@ -123,6 +128,58 @@ public:
         int written = engine_.feedAudio(channelPtrs.data(), totalFrames);
         // 如果容量足够，written 应等于 totalFrames
         engine_.finish(); // 标记输入结束
+    }
+
+    // ==================== 播放进度与跳转 ====================
+
+    /**
+     * @brief 当前播放位置（输入音频帧数，绝对位置，含跳转偏移）。
+     *        精确值来自引擎内部已消耗输入计数。
+     */
+    int getInputPosition() const {
+        return seekOffset_ + engine_.inputConsumed();
+    }
+
+    /**
+     * @brief 跳转到指定输入帧位置。
+     * @param frameOffset 目标帧（0 = 文件开头）
+     * @return true 表示成功；false 表示参数越界或未加载数据。
+     *
+     * @note 内部会停止当前播放线程 -> 重置引擎 -> 从偏移处重新喂入数据，
+     *      然后按之前的运行/暂停状态恢复。调用方必须保证 loadAudio()
+     *      传入的 data 指针仍然有效（本类持有的是借用指针）。
+     */
+    bool seekTo(int frameOffset) {
+        if (!sourceData_ || sourceFrames_ <= 0) return false;
+        if (frameOffset < 0 || frameOffset >= sourceFrames_) return false;
+
+        bool wasPlaying = running_.load(std::memory_order_relaxed);
+        bool wasPaused  = paused_.load(std::memory_order_relaxed);
+        stop(); // 停止并等待后台线程退出
+
+        engine_.reset();
+        int remaining = sourceFrames_ - frameOffset;
+        const float* data = sourceData_ + frameOffset;
+
+        // 构建指针数组（平面格式，从偏移处开始）
+        // 注意：平面布局为 [L0..L(n-1) | R0..R(n-1)]，R 声道起点 = 源数据 + 总帧数
+        std::vector<const float*> channelPtrs(channels_);
+        if (channels_ == 2) {
+            channelPtrs[0] = data;                                       // L 从偏移处
+            channelPtrs[1] = sourceData_ + sourceFrames_ + frameOffset; // R 从偏移处
+        } else {
+            channelPtrs[0] = data;
+        }
+
+        engine_.feedAudio(channelPtrs.data(), remaining);
+        engine_.finish(); // 标记输入结束
+        seekOffset_ = frameOffset;
+
+        if (wasPlaying) {
+            play();
+            if (wasPaused) pause(); // 保持暂停状态
+        }
+        return true;
     }
 
     // ==================== 播放控制 ====================
@@ -260,4 +317,8 @@ private:
     std::thread workThread_;                ///< 后台工作线程
 
     std::function<void(const float* data, int frames, int channels)> audioCallback_; ///< 数据回调
+
+    const float* sourceData_ = nullptr;    ///< 源数据借用指针（seek 时重新喂入用）
+    int sourceFrames_ = 0;                 ///< 源数据总帧数
+    int seekOffset_ = 0;                   ///< 当前跳转偏移（输入帧）
 };
