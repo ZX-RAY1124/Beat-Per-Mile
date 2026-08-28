@@ -11,6 +11,7 @@
 struct test_audio {
 private:
     std::string name;
+    
 public:
     test_audio();
     void make_name(std::string name);

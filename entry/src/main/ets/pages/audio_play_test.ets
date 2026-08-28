@@ -15,10 +15,15 @@ struct audio_test {
     init();
   }
 
+  aboutToDisappear(): void {
+    release(this.getUIContext().getHostContext() as common.UIAbilityContext);
+  }
+
   build() {
       HdsNavDestination(){
         Column(){
-          Button("播放").width(60).height(30).onClick(()=> {start();})
+          Button("播放").width(60).height(30).onClick(()=> {if(hadInit){start();}else {initArguments(this.getUIContext().getHostContext() as common.UIAbilityContext);
+            init();start();}})
           Button("暂停").width(60).height(30).onClick(()=> {stop();})
           Button("终止").width(60).height(30).onClick(()=> {release(this.getUIContext().getHostContext() as common.UIAbilityContext);})
         }.justifyContent(FlexAlign.Center).offset({y : 200});
@@ -34,11 +39,13 @@ class Options {
   public length?: number;
 }
 
+let hadInit: boolean = false;
+
 let audioRenderer: audio.AudioRenderer | undefined = undefined;
 // 从API版本26.0.0开始，参数samplingRate支持number类型。
 // 音频渲染扩展支持8000Hz到384000Hz范围内以10Hz为步长的采样率值。具体设备支持的采样率规格会存在差异。
 let audioStreamInfo: audio.AudioStreamInfo = {
-  samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_48000, // 采样率。
+  samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_44100, // 采样率。
   channels: audio.AudioChannel.CHANNEL_2, // 通道。
   sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE, // 采样格式。
   encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW // 编码格式。
@@ -53,7 +60,10 @@ let audioRendererOptions: audio.AudioRendererOptions = {
 };
 let writeDataCallback: audio.AudioRendererWriteDataCallback;
 
+
+
 async function initArguments(context: common.UIAbilityContext) {
+  hadInit = true;
   let bufferSize: number = 0;
   let file = await context.resourceManager.getRawFd('credits.wav');
   writeDataCallback = (buffer: ArrayBuffer) => {
