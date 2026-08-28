@@ -259,10 +259,12 @@ private:
         std::vector<float*> outputPtrs(channels_);
         // 使用高精度时钟驱动
         auto nextWake = std::chrono::steady_clock::now();
+        bool wasPaused = false; // 上次迭代是否处于暂停（恢复时需重置节拍）
 
         while (running_) {
             // ---- 暂停状态：输出静音，不消耗引擎数据 ----
             if (paused_) {
+                wasPaused = true;
                 if (audioCallback_) {
                     // 产生静音数据（可复用静态缓冲区，但注意线程安全）
                     static std::vector<float> silence(blockSize_ * channels_, 0.0f);
@@ -271,6 +273,14 @@ private:
                 // 短暂睡眠，避免 CPU 空转
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
+            }
+
+            // ---- 刚从暂停恢复：重置节拍时钟 ----
+            // 否则 nextWake 停留在暂停前的旧值，恢复后会"追赶"式爆发输出，
+            // 把暂停期间欠下的音频瞬间全部吐出（进度飞跳、再次暂停不生效）。
+            if (wasPaused) {
+                nextWake = std::chrono::steady_clock::now();
+                wasPaused = false;
             }
 
             // ---- 正常处理 ----
