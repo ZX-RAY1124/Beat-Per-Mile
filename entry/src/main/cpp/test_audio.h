@@ -26,8 +26,8 @@ private:
     
 public:
     test_audio();
-    float channel_r;
-    float channel_l;
+    std::vector<float> channel_r;
+    std::vector<float> channel_l;
     int sample_rate;
     void make_name(std::string name);
     std::string get_name();

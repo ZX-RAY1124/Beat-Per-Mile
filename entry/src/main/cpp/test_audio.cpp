@@ -12,8 +12,6 @@
 
 test_audio::test_audio():player(2, 44100, 65536, 1.0, 512) {
     avformat_network_init();
-    
-    
 }
 
 void test_audio::make_name(std::string name) {
@@ -60,6 +58,7 @@ void test_audio::init_audio(char file_path[]){
             while(avcodec_receive_frame(codecCtx, frame) == 0){
                 //处理数据
                 process_audio(frame);
+                
             }
         }
         av_packet_unref(packet);
@@ -67,7 +66,7 @@ void test_audio::init_audio(char file_path[]){
     
     avcodec_send_packet(codecCtx, NULL);
     while(avcodec_receive_frame(codecCtx,frame) == 0){
-        
+        process_audio(frame);
     }
     
     
@@ -76,6 +75,9 @@ void test_audio::init_audio(char file_path[]){
         OH_LOG_ERROR(LOG_APP, "Open File Error!");
         return;
     }
+    
+    //释放资源并关闭解码器
+    avcodec_close(codecCtx);
     
     
 }
@@ -135,10 +137,12 @@ void test_audio::process_audio(AVFrame *frame) {
 
 void test_audio::channel_split(int channel, float data){
     if(channel == 0)
-        this->channel_l = data;
+        this->channel_l.push_back(data);
     if(channel == 1)
-        this->channel_r = data;
+        this->channel_r.push_back(data);
     else if (channel > 1){
         return;   
     }
 }
+
+
