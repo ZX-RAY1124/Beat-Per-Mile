@@ -7,14 +7,24 @@
 #ifndef BEAT_PER_MILE_TEST_AUDIO_H
 #define BEAT_PER_MILE_TEST_AUDIO_H
 
+#include <cstdint>
 #include <string>
 #include "LiveStretchPlayer.h"
+#include "libavutil/frame.h"
+extern "C" {
+    #include <libavformat/avformat.h>
+    #include <libavcodec/avcodec.h>
+}
 
 struct test_audio {
 private:
     std::string name;
     LiveStretchPlayer player;
     FILE *file;
+    void process_audio(AVFrame *frame);
+    void channel_split(int channel, float data);
+    float channel_r;
+    float channel_l;
 public:
     test_audio();
     void make_name(std::string name);
