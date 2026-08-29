@@ -23,10 +23,12 @@ private:
     FILE *file;
     void process_audio(AVFrame *frame);
     void channel_split(int channel, float data);
-    float channel_r;
-    float channel_l;
+    
 public:
     test_audio();
+    float channel_r;
+    float channel_l;
+    int sample_rate;
     void make_name(std::string name);
     std::string get_name();
     void init_audio(char file_path[]);

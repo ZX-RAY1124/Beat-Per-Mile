@@ -97,9 +97,7 @@ void test_audio::process_audio(AVFrame *frame) {
     
     int bps = av_get_bytes_per_sample(fmt);
     if (bps <= 0) return;  // 安全保护
-    
-    // 3. 获取单平面大小（字节），用于防止读取越界
-    
+    this->sample_rate = frame->sample_rate;
     
     if(is_planer){
         //遍历每一个声道
@@ -116,8 +114,7 @@ void test_audio::process_audio(AVFrame *frame) {
             float *samples = (float*)data_ptr;  // 假设是 FLTP
             for (int i = 0; i < samples_to_process; i++) {
                 // 处理 samples[i] （第 ch 声道，第 i 个样本）
-                
-                
+                channel_split(ch, samples[i]);
             }
             
         }
