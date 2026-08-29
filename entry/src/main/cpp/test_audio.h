@@ -10,10 +10,10 @@
 #include <cstdint>
 #include <string>
 #include "LiveStretchPlayer.h"
-#include "libavutil/frame.h"
 extern "C" {
-    #include <libavformat/avformat.h>
+    #include <libavutil/samplefmt.h>
     #include <libavcodec/avcodec.h>
+    #include <libavformat/avformat.h>
 }
 
 struct test_audio {

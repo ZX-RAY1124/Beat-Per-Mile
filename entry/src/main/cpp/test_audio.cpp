@@ -9,6 +9,11 @@
 #include "hilog/log.h"
 #include <cstdint>
 
+extern "C" {
+    #include <libavutil/samplefmt.h>
+    #include <libavcodec/avcodec.h>
+    #include <libavformat/avformat.h>
+}
 
 test_audio::test_audio():player(2, 44100, 65536, 1.0, 512) {
     avformat_network_init();
