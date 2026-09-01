@@ -69,6 +69,7 @@ public:
           paused_(false) {
         updateInterval();
         outputBuffer_.resize(blockSize_ * channels_);
+        silenceBuf_.assign(blockSize_ * channels_, 0.0f);
     }
 
     ~LiveStretchPlayer() {
@@ -91,6 +92,7 @@ public:
         blockSize_ = newBlockSize;
         updateInterval();
         outputBuffer_.resize(blockSize_ * channels_);
+        silenceBuf_.assign(blockSize_ * channels_, 0.0f);
         return true;
     }
 
@@ -266,9 +268,8 @@ private:
             if (paused_) {
                 wasPaused = true;
                 if (audioCallback_) {
-                    // 产生静音数据（可复用静态缓冲区，但注意线程安全）
-                    static std::vector<float> silence(blockSize_ * channels_, 0.0f);
-                    audioCallback_(silence.data(), blockSize_, channels_);
+                    // 产生静音数据（每实例独立缓冲，多播放器并发/不同块大小均安全）
+                    audioCallback_(silenceBuf_.data(), blockSize_, channels_);
                 }
                 // 短暂睡眠，避免 CPU 空转
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -321,6 +322,7 @@ private:
     int blockSize_;                         ///< 每次处理的帧数
     double intervalMs_;                     ///< 时间间隔（毫秒）
     std::vector<float> outputBuffer_;       ///< 输出缓冲区（平面格式）
+    std::vector<float> silenceBuf_;         ///< 暂停时的静音输出缓冲（每实例独立）
 
     std::atomic<bool> running_;             ///< 线程是否运行
     std::atomic<bool> paused_;              ///< 是否暂停
