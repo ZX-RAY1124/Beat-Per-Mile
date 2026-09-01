@@ -10,30 +10,26 @@
 #include <cstdint>
 #include <string>
 #include "LiveStretchPlayer.h"
-extern "C" {
-    #include <libavutil/samplefmt.h>
-    #include <libavcodec/avcodec.h>
-    #include <libavformat/avformat.h>
-}
+
 
 struct test_audio {
 private:
     std::string name;
     LiveStretchPlayer player;
-    FILE *file;
-    void process_audio(AVFrame *frame);
-    void channel_split(int channel, float data);
     
 public:
-    test_audio();
-    std::vector<float> channel_r;
-    std::vector<float> channel_l;
-    int sample_rate;
     void make_name(std::string name);
     std::string get_name();
-    void init_audio(char file_path[]);
-    void audio_play();
-    void audio_pause();
+    test_audio(int channels, int sampleRate, long long ringBufferSize, 
+                      double initialSpeed = 1.0, int blockSize = 512);
+    
+    void load_audio(const float *data, int totalFrames);
+    void setSpeed(double speed);
+    void pause();
+    void resume();
+    void stop();
+    void play();
+    void player_init();
 };
 
 #endif //BEAT_PER_MILE_TEST_AUDIO_H

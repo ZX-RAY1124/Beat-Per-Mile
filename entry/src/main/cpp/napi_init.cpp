@@ -50,7 +50,7 @@ static napi_value test_audio(napi_env env, napi_callback_info info){       //测
     // -----------------------
     std::string name;    
     name = std::string(buf, len);
-    struct test_audio audio;       //声明构建
+    struct test_audio audio(2, 44100, 65536, 1.0, 512);       //声明构建
     audio.make_name(name); 
     //------------------------
     napi_create_string_utf8(env, audio.get_name().c_str(), audio.get_name().length(), &result);

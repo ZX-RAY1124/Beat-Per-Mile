@@ -39,7 +39,7 @@
  *   player.setAudioCallback([](const float* data, int frames, int ch) {
  *       // 将 data 交给声卡驱动或 NAPI 回调
  *   });
- *   player.loadAudio(planarData, totalFrames);
+ *   player.loadAudio(planarData,  totalFrames);
  *   player.play();
  *   player.setSpeed(1.5); // 可随时调速
  *   player.pause();       // 暂停
@@ -59,7 +59,7 @@ public:
      * 
      * @note blockSize 会影响延迟和 CPU 负载，可在 play() 前通过 setBlockSize() 调整。
      */
-    LiveStretchPlayer(int channels, int sampleRate, int ringBufferSize, 
+    LiveStretchPlayer(int channels, int sampleRate, long long ringBufferSize, 
                       double initialSpeed = 1.0, int blockSize = 512)
         : engine_(channels, sampleRate, ringBufferSize, initialSpeed),
           channels_(channels),

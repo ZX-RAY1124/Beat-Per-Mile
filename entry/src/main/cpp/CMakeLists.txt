@@ -15,7 +15,7 @@ include_directories(
 
 set(PREBUILT_LIBS ${NATIVERENDER_ROOT_PATH}/libs/${OHOS_ARCH})
 
-add_library(entry SHARED napi_init.cpp test_audio.h test_audio.cpp)
+add_library(entry SHARED napi_init.cpp test_audio.h test_audio.cpp audio_process.h audio_process.cpp)
 
 if(OHOS_ARCH STREQUAL "arm64-v8a")
     set(FFTW_LIB ${PREBUILT_LIBS}/libfftw3f.so.3.6.9)
