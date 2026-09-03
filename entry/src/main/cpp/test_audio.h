@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <string>
 #include "LiveStretchPlayer.h"
+#include "music_data.h"
+#include "napi/native_api.h"
 
 
 struct test_audio {
@@ -28,8 +30,11 @@ public:
     void pause();
     void resume();
     void stop();
-    void play();
-    void player_init();
+    void play(music_data Callback_data);
+    bool _has_stop;
+
 };
+
+
 
 #endif //BEAT_PER_MILE_TEST_AUDIO_H
