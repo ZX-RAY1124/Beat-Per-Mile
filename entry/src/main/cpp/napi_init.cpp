@@ -8,7 +8,20 @@
 // 自定义上下文结构体
 struct TsfnContext {
     napi_ref callbackRef = nullptr; // 强引用 ArkTS 回调
+    napi_threadsafe_function tsfn = nullptr;
+    
+    std::atomic<bool> paused{false};
+    std::atomic<bool> cancelled{false};
+    std::string fileName;
+    std::thread worker;
+    
+    int downloadId;    //播放任务id
 };
+
+// ─── 全局任务管理器（用于按ID查找上下文） ───
+static std::unordered_map<int, TsfnContext *> g_downloadMap;
+static std::mutex g_mapMutex;
+static int g_nextId = 1;
 
 enum ParamStatus{
     ONPLAY,
@@ -82,9 +95,9 @@ static void TsfnFinalizeCallback(napi_env env, void *finalizeData, void *finaliz
     OH_LOG_INFO(LOG_APP, "[TSFN] Thread-safe function finalized");
 }
 
-static void WorkerThread(TsfnContext *ctx, napi_threadsafe_function tsfn){
+static void WorkerThread(TsfnContext *ctx){
     
-    napi_acquire_threadsafe_function(tsfn);
+    napi_acquire_threadsafe_function(ctx->tsfn);
     //work
     audio_processor audio_processor;
     audio_processor.load_audio("");            //音频位置
@@ -94,18 +107,46 @@ static void WorkerThread(TsfnContext *ctx, napi_threadsafe_function tsfn){
     while(audio_player._has_stop){
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         audio_player.play(*dataPack);
-        napi_status status = napi_call_threadsafe_function(tsfn, dataPack, napi_tsfn_nonblocking);
+        napi_status status = napi_call_threadsafe_function(ctx->tsfn, dataPack, napi_tsfn_nonblocking);
 
         if (status == napi_queue_full) {
             OH_LOG_WARN(LOG_APP, "[TSFN] Queue full, dropping progress %.2f",*dataPack->data);
             delete dataPack; // 投递失败要手动释放
         }
+        
+        if(ctx->cancelled.load()){
+                napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
+                {
+                    std::lock_guard<std::mutex> lock(g_mapMutex);
+                    g_downloadMap.erase(ctx->downloadId);
+                }
+                delete ctx;
+                return;
+        }
+        
+        while (ctx->paused.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if(ctx->cancelled.load()){
+                napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
+                {
+                    std::lock_guard<std::mutex> lock(g_mapMutex);
+                    g_downloadMap.erase(ctx->downloadId);
+                }
+                delete ctx;
+                return;
+            }
+        }
+        
+        
     }
     
-    napi_release_threadsafe_function(tsfn, napi_tsfn_release);
-
-    
-    
+    napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
+    {
+        std::lock_guard<std::mutex> lock(g_mapMutex);
+        g_downloadMap.erase(ctx->downloadId);
+    }
+    delete ctx;
+    return;
     
 }
 
@@ -125,6 +166,61 @@ static void CallJSCallback(napi_env env, napi_value jsCallback, void *context, v
     delete progressData;
 }
 
+
+napi_value musicPause(napi_env env, napi_callback_info info){
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    
+    int id;
+    napi_get_value_int32(env, args[0], &id);
+    
+    std::lock_guard<std::mutex> lock(g_mapMutex);
+    auto it = g_downloadMap.find(id);
+    if (it != g_downloadMap.end()) {
+        it->second->paused.store(true);
+        OH_LOG_INFO(LOG_APP, "[NAPI] Music %d paused", id);
+    }
+    return nullptr;
+
+}
+
+napi_value musicResume(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    
+    int id;
+    napi_get_value_int32(env, args[0], &id);
+    std::lock_guard<std::mutex> lock(g_mapMutex);
+    auto it = g_downloadMap.find(id);
+    if(it != g_downloadMap.end()) {
+        it->second->paused.store(false);
+    }
+    return nullptr;
+}
+
+napi_value musicCancel(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    int id;
+    napi_get_value_int32(env, args[0], &id);
+
+    std::lock_guard<std::mutex> lock(g_mapMutex);
+    auto it = g_downloadMap.find(id);
+    if (it != g_downloadMap.end()) {
+        it->second->cancelled.store(true);
+        it->second->paused.store(false); 
+        OH_LOG_INFO(LOG_APP, "[NAPI] Download %d cancelled", id);
+    }
+
+    return nullptr;
+}
+
+
+
 //音乐调度bridge
 
 
@@ -141,8 +237,14 @@ static napi_value music_playing(napi_env env, napi_callback_info info){
     napi_value resourceName = nullptr;
     napi_create_string_utf8(env, "Music_data", NAPI_AUTO_LENGTH, &resourceName);
     //创建安全进程函数
+
+    {
+        std::lock_guard<std::mutex> lock(g_mapMutex);
+        ctx->downloadId = g_nextId++;
+        g_downloadMap[ctx->downloadId] = ctx;
+        
+    }
     
-    napi_threadsafe_function tsfn = nullptr;
     napi_create_threadsafe_function(env,
                                     jsCallback,
                                     nullptr,
@@ -153,10 +255,10 @@ static napi_value music_playing(napi_env env, napi_callback_info info){
                                     TsfnFinalizeCallback,      //回调销毁（改）
                                     nullptr,
                                     CallJSCallback,       //主线程真正的回调
-                                    &tsfn);
+                                    &ctx->tsfn);
     
-    std::thread workThread(WorkerThread, ctx, tsfn);
-    workThread.detach();
+    ctx->worker = std::thread (WorkerThread, ctx, ctx->tsfn);
+    ctx->worker.detach();
     return nullptr;
     
 }
