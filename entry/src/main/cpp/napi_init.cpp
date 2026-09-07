@@ -2,8 +2,14 @@
 #include "napi/native_api.h"
 #include "hilog/log.h"
 #include "test_audio.h"
+#include <ohaudio/native_audiostream_base.h>
+#include <ohaudio/native_audiostreambuilder.h>
+#include <thread>
+#include "LiveStretchPlayer.h"
 // 暂时不引用 essentia，先验证编译链路没问题
-// #include "essentia/essentia.h"
+
+static OH_AudioRenderer* audioRenderer;
+static OH_AudioStreamBuilder* builder;                   //音频流构建器
 
 // 自定义上下文结构体
 struct TsfnContext {
@@ -18,6 +24,13 @@ struct TsfnContext {
     int downloadId;    //播放任务id
 };
 
+struct music_data {
+    int clip_num;
+    float* data;
+    int32_t audioDataSize;
+    
+};
+
 // ─── 全局任务管理器（用于按ID查找上下文） ───
 static std::unordered_map<int, TsfnContext *> g_downloadMap;
 static std::mutex g_mapMutex;
@@ -28,6 +41,72 @@ enum ParamStatus{
     PAUSE,
     DONE,
 };
+//自定义音频加载函数
+static OH_AudioData_Callback_Result OnWriteData_New(
+    OH_AudioRenderer* renderer,
+    void* userData,
+    void* audioData,
+    int32_t audioDataSize){
+    
+        return AUDIO_DATA_CALLBACK_RESULT_VALID;
+    
+    };
+//自定义音频中断函数
+void OnInterruptEvent_New(
+    OH_AudioRenderer* renderer,
+    void* userData,
+    OH_AudioInterrupt_ForceType type,
+    OH_AudioInterrupt_Hint hint){
+    
+    //改
+    };
+
+
+//异常回调函数
+void OnError_New(
+    OH_AudioRenderer* render,
+    void* userData,
+    OH_AudioStream_Result error
+){
+
+             //改
+};
+
+static napi_value AudioRendererInit(napi_env env, napi_callback_info info){
+    if (audioRenderer){            //事先清理
+        OH_AudioRenderer_Release(audioRenderer);
+        OH_AudioStreamBuilder_Destroy(builder);
+        
+        audioRenderer = nullptr;
+        builder = nullptr;
+    }
+    //============构建音频播放器============ 
+    OH_AudioStreamBuilder_Create(&builder, AUDIOSTREAM_TYPE_RENDERER);
+    
+    const int SAMPLING_RATE_48K = 48000;
+    OH_AudioStreamBuilder_SetSamplingRate(builder, SAMPLING_RATE_48K);
+    
+    const int channelCount = 2;                     //声道
+    OH_AudioStreamBuilder_SetChannelCount(builder, channelCount);
+    
+    // 设置音频采样格式。
+    OH_AudioStreamBuilder_SetSampleFormat(builder, AUDIOSTREAM_SAMPLE_S16LE);
+    // 设置音频流的编码类型。
+    OH_AudioStreamBuilder_SetEncodingType(builder, AUDIOSTREAM_ENCODING_TYPE_RAW);
+    // 设置输出音频流的工作场景。
+    OH_AudioStreamBuilder_SetRendererInfo(builder, AUDIOSTREAM_USAGE_MUSIC);
+    OH_AudioStreamBuilder_SetLatencyMode(builder, AUDIOSTREAM_LATENCY_MODE_NORMAL);
+
+    
+    //注册三大回调函数
+    OH_AudioRenderer_OnInterruptCallback OnInterruptCb = OnInterruptEvent_New;
+    OH_AudioStreamBuilder_SetRendererInterruptCallback(builder, OnInterruptCb, nullptr);
+    OH_AudioRenderer_OnErrorCallback OnErrorCb = OnError_New;
+    OH_AudioStreamBuilder_SetRendererErrorCallback(builder, OnErrorCb, nullptr);
+    OH_AudioRenderer_OnWriteDataCallback writeDataCb = OnWriteData_New;
+    OH_AudioStreamBuilder_SetRendererWriteDataCallback(builder, writeDataCb, nullptr);
+    return nullptr;
+}
 
 static napi_value Add(napi_env env, napi_callback_info info)
 {
@@ -75,7 +154,7 @@ static napi_value test_audio(napi_env env, napi_callback_info info){       //测
     // -----------------------
     std::string name;    
     name = std::string(buf, len);
-    struct test_audio audio(2, 44100, 65536, 1.0, 512);       //声明构建
+    struct test_audio audio;       //声明构建
     audio.make_name(name); 
     //------------------------
     napi_create_string_utf8(env, audio.get_name().c_str(), audio.get_name().length(), &result);
@@ -95,85 +174,103 @@ static void TsfnFinalizeCallback(napi_env env, void *finalizeData, void *finaliz
     OH_LOG_INFO(LOG_APP, "[TSFN] Thread-safe function finalized");
 }
 
-static void WorkerThread(TsfnContext *ctx){
-    
-    napi_acquire_threadsafe_function(ctx->tsfn);
-    //work
-    audio_processor audio_processor;
-    audio_processor.load_audio("");            //音频位置
-    struct test_audio audio_player(2, 44100, 65536, 1.0, 512);       //声明构建
-    audio_player.load_audio(audio_processor.make_planner_data(), audio_processor.total_frame);
-    auto *dataPack = new music_data();
-    while(audio_player._has_stop){
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        audio_player.play(*dataPack);
-        napi_status status = napi_call_threadsafe_function(ctx->tsfn, dataPack, napi_tsfn_nonblocking);
-
-        if (status == napi_queue_full) {
-            OH_LOG_WARN(LOG_APP, "[TSFN] Queue full, dropping progress %.2f",*dataPack->data);
-            delete dataPack; // 投递失败要手动释放
-        }
-        
-        if(ctx->cancelled.load()){
-                napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
-                {
-                    std::lock_guard<std::mutex> lock(g_mapMutex);
-                    g_downloadMap.erase(ctx->downloadId);
-                }
-                delete ctx;
-                return;
-        }
-        
-        while (ctx->paused.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if(ctx->cancelled.load()){
-                napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
-                {
-                    std::lock_guard<std::mutex> lock(g_mapMutex);
-                    g_downloadMap.erase(ctx->downloadId);
-                }
-                delete ctx;
-                return;
-            }
-        }
-        
-        
-    }
-    
+static void clear(TsfnContext* ctx){
     napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
     {
         std::lock_guard<std::mutex> lock(g_mapMutex);
         g_downloadMap.erase(ctx->downloadId);
     }
     delete ctx;
+}
+
+
+static void WorkerThread(TsfnContext *ctx){
+    std::vector<float> processed_data;
+    bool finished;
+    bool quit;
+    //============分析音频=============
+    napi_acquire_threadsafe_function(ctx->tsfn);
+    //work
+    audio_processor audio_processor;
+    audio_processor.load_audio("");            //音频位置
+    
+    
+    
+    
+    
+    OH_AudioStreamBuilder_GenerateRenderer(builder, &audioRenderer);   
+    
+    //===========LiveStretchPlayer==============
+    LiveStretchPlayer player(2, audio_processor.sample_rate, audio_processor.total_frame, 1.0, 512);
+    
+    player.setAudioCallback([&processed_data](const float* data, int frame, int ch) {
+        int sampleCount = frame * ch;      //本块采样总数
+        processed_data.assign(data, data + sampleCount);
+        
+    });
+    
+    player.loadAudio(audio_processor.make_planner_data(), audio_processor.total_frame);
+    
+    player.play();    
+    OH_AudioRenderer_Start(audioRenderer);
+    
+    
+    while(!finished && !quit){
+        
+        if(ctx->cancelled.load()){
+            quit = true;
+            clear(ctx);
+        }
+        
+        while (ctx->paused.load()) {
+            if(ctx->cancelled.load()){
+                quit = true;
+                clear(ctx);
+            }
+        }
+        
+        if(!finished && !quit){
+            //判断结束
+            //finished = true;
+        }
+        
+        napi_call_threadsafe_function(ctx->tsfn, nullptr, napi_tsfn_nonblocking);          //回调函数
+    }
+    
+    clear(ctx);
     return;
     
 }
 
+
+
 static void CallJSCallback(napi_env env, napi_value jsCallback, void *context, void *data){
     if(data == nullptr)
         return;
-    auto *progressData = static_cast<music_data *>(data);
+   // auto *progressData = static_cast<music_data *>(data);
 
     napi_value music_data = nullptr;
-    napi_create_double(env, *(progressData->data), &music_data);
+   // napi_create_double(env, *(progressData->data), &music_data);
     
     //回调
     napi_value undefined = nullptr;
     napi_get_undefined(env, &undefined);
     napi_call_function(env, undefined, jsCallback, 1, &music_data, nullptr);
     
-    delete progressData;
+   // delete progressData;
 }
 
 
-napi_value musicPause(napi_env env, napi_callback_info info){
+
+static napi_value musicPause(napi_env env, napi_callback_info info){
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     
     int id;
     napi_get_value_int32(env, args[0], &id);
+    
+    OH_AudioRenderer_Pause(audioRenderer);           //暂停音频
     
     std::lock_guard<std::mutex> lock(g_mapMutex);
     auto it = g_downloadMap.find(id);
@@ -185,12 +282,14 @@ napi_value musicPause(napi_env env, napi_callback_info info){
 
 }
 
-napi_value musicResume(napi_env env, napi_callback_info info) {
+static napi_value musicResume(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     
     int id;
+    
+    OH_AudioRenderer_Start(audioRenderer);              //继续播放
     napi_get_value_int32(env, args[0], &id);
     std::lock_guard<std::mutex> lock(g_mapMutex);
     auto it = g_downloadMap.find(id);
@@ -200,12 +299,14 @@ napi_value musicResume(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-napi_value musicCancel(napi_env env, napi_callback_info info) {
+static napi_value musicCancel(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
+    
     int id;
+    OH_AudioRenderer_Stop(audioRenderer);         //结束播放
+ 
     napi_get_value_int32(env, args[0], &id);
 
     std::lock_guard<std::mutex> lock(g_mapMutex);
@@ -225,7 +326,7 @@ napi_value musicCancel(napi_env env, napi_callback_info info) {
 
 
 
-static napi_value music_playing(napi_env env, napi_callback_info info){
+static napi_value music_play(napi_env env, napi_callback_info info){
     size_t argc = 1;
     napi_value jsCallback = nullptr;
     napi_get_cb_info(env, info, &argc, &jsCallback, nullptr, nullptr);
@@ -256,7 +357,7 @@ static napi_value music_playing(napi_env env, napi_callback_info info){
                                     nullptr,
                                     CallJSCallback,       //主线程真正的回调
                                     &ctx->tsfn);
-    
+    OH_AudioRenderer_Start(audioRenderer);               //开始播放
     ctx->worker = std::thread (WorkerThread, ctx, ctx->tsfn);
     ctx->worker.detach();
     return nullptr;

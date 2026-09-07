@@ -334,7 +334,7 @@ static bool runPlayback(const AudioData& audio, int blockSize, double speed,
     bool finished = false;
     bool quit = false;
     std::string line;
-    while (!finished && !quit) {
+    while (!finished && !quit) { 
         if (!readLine(line)) { quit = true; break; }   // stdin EOF
         if (line.empty()) continue;
         std::istringstream iss(line);

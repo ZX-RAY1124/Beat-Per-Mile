@@ -9,30 +9,18 @@
 
 #include <cstdint>
 #include <string>
-#include "LiveStretchPlayer.h"
-#include "music_data.h"
 #include "napi/native_api.h"
 
 
 struct test_audio {
 private:
     std::string name;
-    LiveStretchPlayer player;
     
 public:
+    test_audio();
     void make_name(std::string name);
     std::string get_name();
-    test_audio(int channels, int sampleRate, long long ringBufferSize, 
-                      double initialSpeed = 1.0, int blockSize = 512);
     
-    void load_audio(const float *data, int totalFrames);
-    void setSpeed(double speed);
-    void pause();
-    void resume();
-    void stop();
-    void play(music_data Callback_data);
-    bool _has_stop;
-
 };
 
 

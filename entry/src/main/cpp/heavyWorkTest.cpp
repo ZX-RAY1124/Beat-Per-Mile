@@ -6,6 +6,9 @@
 #include <chrono>
 #include <unordered_map>
 #include <mutex>
+#include <ohaudio/native_audiorenderer.h>
+#include <ohaudio/native_audiostreambuilder.h>
+
 
 // ─── 下载任务上下文 ───
 struct DownloadContext {
