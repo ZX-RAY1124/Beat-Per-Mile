@@ -195,9 +195,6 @@ static void WorkerThread(TsfnContext *ctx){
     audio_processor.load_audio("");            //音频位置
     
     
-    
-    
-    
     OH_AudioStreamBuilder_GenerateRenderer(builder, &audioRenderer);   
     
     //===========LiveStretchPlayer==============
@@ -299,7 +296,7 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-static napi_value musicCancel(napi_env env, napi_callback_info info) {
+static napi_value musicCancel(napi_env env, napi_callback_info info) {             // 先Release audio Render 再 musicCancel
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
@@ -320,13 +317,23 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-
+static napi_value AudioRendererRelease(napi_env env, napi_callback_info info){
+    if(audioRenderer){
+        OH_AudioRenderer_Release(audioRenderer);
+        OH_AudioStreamBuilder_Destroy(builder);
+        audioRenderer = nullptr;
+        builder = nullptr;
+    }
+    //这里释放文件进程
+    
+    return nullptr;
+}
 
 //音乐调度bridge
 
 
 
-static napi_value music_play(napi_env env, napi_callback_info info){
+static napi_value musicPlay(napi_env env, napi_callback_info info){
     size_t argc = 1;
     napi_value jsCallback = nullptr;
     napi_get_cb_info(env, info, &argc, &jsCallback, nullptr, nullptr);
@@ -377,7 +384,13 @@ static napi_value Init(napi_env env, napi_value exports)
                 // { "add" 是 ArkTS 侧调用时用的名字, Add 是上面的 C++ 函数 }
         {"add", nullptr, Add, nullptr, nullptr, nullptr, napi_default, nullptr },
         {"squire", nullptr, Squire, nullptr,nullptr,nullptr, napi_default, nullptr},
-        {"test_audio", nullptr, test_audio, nullptr, nullptr,nullptr, napi_writable, nullptr}
+        {"test_audio", nullptr, test_audio, nullptr, nullptr,nullptr, napi_writable, nullptr},
+        {"music_play", nullptr, musicPlay, nullptr, nullptr, nullptr, napi_writable, nullptr},
+        {"music_resume", nullptr, musicResume, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"music_cancel", nullptr, musicCancel, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"music_pause", nullptr, musicPause, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"audioRendererInit", nullptr, AudioRendererInit, nullptr, nullptr, nullptr, napi_writable, nullptr},
+        {"audioRendererRelease", nullptr, AudioRendererRelease, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;
