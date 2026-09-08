@@ -6,6 +6,7 @@
 #include <ohaudio/native_audiostreambuilder.h>
 #include <thread>
 #include "LiveStretchPlayer.h"
+#include <cstring>
 // 暂时不引用 essentia，先验证编译链路没问题
 
 static OH_AudioRenderer* audioRenderer;
@@ -25,34 +26,47 @@ struct TsfnContext {
 };
 
 struct music_data {
-    int clip_num;
-    float* data;
+    int block_num;
+    std::vector<float> proceed_data;
     int32_t audioDataSize;
-    
 };
 
 // ─── 全局任务管理器（用于按ID查找上下文） ───
 static std::unordered_map<int, TsfnContext *> g_downloadMap;
 static std::mutex g_mapMutex;
-static int g_nextId = 1;
+static int g_nextId = 1; 
+static music_data* dataClip;
+static std::atomic<long long> g_lastCallbackMs;     //最后一次回调时间
+size_t g_writePosition = 0;          // 当前写入位置（按 float 个数计）
+bool g_isPlaybackFinished = false;
 
-enum ParamStatus{
-    ONPLAY,
-    PAUSE,
-    DONE,
-};
+
 //自定义音频加载函数
 static OH_AudioData_Callback_Result OnWriteData_New(
     OH_AudioRenderer* renderer,
     void* userData,
-    void* audioData,
-    int32_t audioDataSize){
+    void* buffer,
+    int32_t bufferLen){
+        size_t remainingFloats = dataClip->proceed_data.size() - g_writePosition;
+        size_t bytesAvailable = remainingFloats * sizeof(float);
+        size_t bytesToWrite = (bufferLen < bytesAvailable) ? bufferLen : bytesAvailable;
     
-        return AUDIO_DATA_CALLBACK_RESULT_VALID;
+        if(bytesToWrite > 0){
+    
+            std::memcpy(buffer, dataClip->proceed_data.data() + g_writePosition, bytesToWrite);
+            g_writePosition += bytesToWrite / sizeof(float);
+        }
+        if (bytesToWrite < static_cast<size_t>(bufferLen)) {
+            uint8_t* buf = static_cast<uint8_t*>(buffer);
+            std::memset(buf + bytesToWrite, 0, bufferLen - bytesToWrite);
+    } else {
+        std::memset(buffer, 0, bufferLen);
+    }
+    return AUDIO_DATA_CALLBACK_RESULT_VALID;
     
     };
 //自定义音频中断函数
-void OnInterruptEvent_New(
+static void OnInterruptEvent_New(
     OH_AudioRenderer* renderer,
     void* userData,
     OH_AudioInterrupt_ForceType type,
@@ -63,7 +77,7 @@ void OnInterruptEvent_New(
 
 
 //异常回调函数
-void OnError_New(
+static void OnError_New(
     OH_AudioRenderer* render,
     void* userData,
     OH_AudioStream_Result error
@@ -90,7 +104,7 @@ static napi_value AudioRendererInit(napi_env env, napi_callback_info info){
     OH_AudioStreamBuilder_SetChannelCount(builder, channelCount);
     
     // 设置音频采样格式。
-    OH_AudioStreamBuilder_SetSampleFormat(builder, AUDIOSTREAM_SAMPLE_S16LE);
+    OH_AudioStreamBuilder_SetSampleFormat(builder, AUDIOSTREAM_SAMPLE_S32LE);
     // 设置音频流的编码类型。
     OH_AudioStreamBuilder_SetEncodingType(builder, AUDIOSTREAM_ENCODING_TYPE_RAW);
     // 设置输出音频流的工作场景。
@@ -143,6 +157,11 @@ static napi_value Squire(napi_env env, napi_callback_info info){
     return final;
 }
 
+static long long nowMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
 static napi_value test_audio(napi_env env, napi_callback_info info){       //测试和外部库链接
     size_t argc = 1;
     napi_value result;
@@ -184,8 +203,8 @@ static void clear(TsfnContext* ctx){
 }
 
 
+
 static void WorkerThread(TsfnContext *ctx){
-    std::vector<float> processed_data;
     bool finished;
     bool quit;
     //============分析音频=============
@@ -199,11 +218,13 @@ static void WorkerThread(TsfnContext *ctx){
     
     //===========LiveStretchPlayer==============
     LiveStretchPlayer player(2, audio_processor.sample_rate, audio_processor.total_frame, 1.0, 512);
-    
-    player.setAudioCallback([&processed_data](const float* data, int frame, int ch) {
+    dataClip->block_num = 0;
+    player.setAudioCallback([](const float* data, int frame, int ch) {
+        g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
+
         int sampleCount = frame * ch;      //本块采样总数
-        processed_data.assign(data, data + sampleCount);
-        
+        dataClip->proceed_data.assign(data, data + sampleCount);
+        dataClip->block_num += 1;
     });
     
     player.loadAudio(audio_processor.make_planner_data(), audio_processor.total_frame);
@@ -211,27 +232,39 @@ static void WorkerThread(TsfnContext *ctx){
     player.play();    
     OH_AudioRenderer_Start(audioRenderer);
     
-    
+    //播放器循环
     while(!finished && !quit){
         
         if(ctx->cancelled.load()){
             quit = true;
             clear(ctx);
+            OH_AudioRenderer_Stop(audioRenderer);
+
         }
         
         while (ctx->paused.load()) {
             if(ctx->cancelled.load()){
                 quit = true;
                 clear(ctx);
+                OH_AudioRenderer_Stop(audioRenderer);
             }
         }
         
         if(!finished && !quit){
             //判断结束
             //finished = true;
+            long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
+            if (last > 0 && !ctx->paused.load() &&
+                (nowMs() - last) > 500) {    // 自然结束检测：未暂停且超过 500ms 没有回调 => 播放结束
+                finished = true;
+            }
+            
         }
-        
-        napi_call_threadsafe_function(ctx->tsfn, nullptr, napi_tsfn_nonblocking);          //回调函数
+        napi_call_threadsafe_function(ctx->tsfn, dataClip, napi_tsfn_nonblocking);          //回调函数
+    }
+    player.stop();
+    if(finished){
+        OH_LOG_INFO(LOG_APP, "DONE");
     }
     
     clear(ctx);
@@ -244,10 +277,9 @@ static void WorkerThread(TsfnContext *ctx){
 static void CallJSCallback(napi_env env, napi_value jsCallback, void *context, void *data){
     if(data == nullptr)
         return;
-   // auto *progressData = static_cast<music_data *>(data);
+    music_data* callBackData = static_cast<music_data *>(dataClip);
 
     napi_value music_data = nullptr;
-   // napi_create_double(env, *(progressData->data), &music_data);
     
     //回调
     napi_value undefined = nullptr;
