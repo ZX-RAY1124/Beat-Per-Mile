@@ -15,7 +15,7 @@ include_directories(
 
 set(PREBUILT_LIBS ${NATIVERENDER_ROOT_PATH}/libs/${OHOS_ARCH})
 
-add_library(entry SHARED napi_init.cpp test_audio.h test_audio.cpp audio_process.h audio_process.cpp)
+add_library(entry SHARED napi_bridge_center.cpp test_audio.h test_audio.cpp audio_process.h audio_process.cpp)
 
 if(OHOS_ARCH STREQUAL "arm64-v8a")
     set(FFTW_LIB ${PREBUILT_LIBS}/libfftw3f.so.3.6.9)
@@ -30,6 +30,7 @@ target_link_libraries(entry PUBLIC
     c++abi
     libace_napi.z.so
     libhilog_ndk.z.so
+    libohaudio.so
     ${PREBUILT_LIBS}/libessentia.so
     ${FFTW_LIB}
     ${PREBUILT_LIBS}/libavformat.so.58

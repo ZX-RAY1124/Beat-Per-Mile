@@ -211,7 +211,7 @@ static void WorkerThread(TsfnContext *ctx){
     napi_acquire_threadsafe_function(ctx->tsfn);
     //work
     audio_processor audio_processor;
-    audio_processor.load_audio("");            //音频位置
+    audio_processor.load_audio(nullptr);            //音频位置
     
     
     OH_AudioStreamBuilder_GenerateRenderer(builder, &audioRenderer);   
@@ -397,7 +397,7 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
                                     CallJSCallback,       //主线程真正的回调
                                     &ctx->tsfn);
     OH_AudioRenderer_Start(audioRenderer);               //开始播放
-    ctx->worker = std::thread (WorkerThread, ctx, ctx->tsfn);
+    ctx->worker = std::thread(WorkerThread, ctx);
     ctx->worker.detach();
     return nullptr;
     
