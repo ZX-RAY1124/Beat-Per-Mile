@@ -249,6 +249,7 @@ napi_value GetProgress(napi_env env, napi_callback_info info) {
 }
 
 // ─── 模块注册 ───
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
@@ -257,6 +258,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"resumeDownload", nullptr, ResumeDownload, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"cancelDownload", nullptr, CancelDownload, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getProgress", nullptr, GetProgress, nullptr, nullptr, nullptr, napi_default, nullptr},
+
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

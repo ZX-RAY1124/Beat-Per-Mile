@@ -204,14 +204,14 @@ static void clear(TsfnContext* ctx){
 
 
 
-static void WorkerThread(TsfnContext *ctx){
+static void WorkerThread(TsfnContext *ctx, char filePath[]){
     bool finished;
     bool quit;
     //============分析音频=============
     napi_acquire_threadsafe_function(ctx->tsfn);
     //work
     audio_processor audio_processor;
-    audio_processor.load_audio(nullptr);            //音频位置
+    audio_processor.load_audio(filePath);            //音频位置
     
     
     OH_AudioStreamBuilder_GenerateRenderer(builder, &audioRenderer);   
@@ -366,9 +366,20 @@ static napi_value AudioRendererRelease(napi_env env, napi_callback_info info){
 
 
 static napi_value musicPlay(napi_env env, napi_callback_info info){
-    size_t argc = 1;
+    size_t argc = 2;
+    napi_value args[2] = {nullptr};
     napi_value jsCallback = nullptr;
-    napi_get_cb_info(env, info, &argc, &jsCallback, nullptr, nullptr);
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    jsCallback = args[1];
+    
+    size_t strLen;
+    napi_status sourceStatus =  napi_get_value_string_utf8(env, args[0], nullptr, 0, &strLen);
+    char* buf = new char[strLen + 1]();
+    memset(buf, 0, strLen + 1);
+    sourceStatus = napi_get_value_string_utf8(env, args[0], buf, strLen + 1, &strLen);
+    
+    
+
     //创建上下文
     auto *ctx = new TsfnContext;
     // 强引用 ArkTS 回调，防止被 GC 回收
@@ -397,7 +408,7 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
                                     CallJSCallback,       //主线程真正的回调
                                     &ctx->tsfn);
     OH_AudioRenderer_Start(audioRenderer);               //开始播放
-    ctx->worker = std::thread(WorkerThread, ctx);
+    ctx->worker = std::thread(WorkerThread, ctx, buf);
     ctx->worker.detach();
     return nullptr;
     
