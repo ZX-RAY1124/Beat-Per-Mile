@@ -261,27 +261,24 @@ private:
         std::vector<float*> outputPtrs(channels_);
         // 使用高精度时钟驱动
         auto nextWake = std::chrono::steady_clock::now();
-        bool wasPaused = false; // 上次迭代是否处于暂停（恢复时需重置节拍）
 
         while (running_) {
             // ---- 暂停状态：输出静音，不消耗引擎数据 ----
+            // 注意：静音也按实时节拍输出（与正常处理同频），保证：
+            //   1. 下游（声卡/混音器）在暂停期间获得速率正确的静音流，不饿不溢；
+            //   2. nextWake 全程保持同步，恢复时无缝衔接，不会"追赶"式爆发。
+            //   不要改用固定 sleep_for(1ms)：Windows 定时器精度约 15.6ms，
+            //   Linux/鸿蒙约 1ms，都会让静音以非实时速率输出（暂停时长被压缩或产生洪水）。
             if (paused_) {
-                wasPaused = true;
                 if (audioCallback_) {
                     // 产生静音数据（每实例独立缓冲，多播放器并发/不同块大小均安全）
                     audioCallback_(silenceBuf_.data(), blockSize_, channels_);
                 }
-                // 短暂睡眠，避免 CPU 空转
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                nextWake += std::chrono::microseconds(
+                    static_cast<long long>(intervalMs_ * 1000)
+                );
+                std::this_thread::sleep_until(nextWake);
                 continue;
-            }
-
-            // ---- 刚从暂停恢复：重置节拍时钟 ----
-            // 否则 nextWake 停留在暂停前的旧值，恢复后会"追赶"式爆发输出，
-            // 把暂停期间欠下的音频瞬间全部吐出（进度飞跳、再次暂停不生效）。
-            if (wasPaused) {
-                nextWake = std::chrono::steady_clock::now();
-                wasPaused = false;
             }
 
             // ---- 正常处理 ----
