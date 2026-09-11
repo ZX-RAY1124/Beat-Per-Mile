@@ -1,5 +1,5 @@
 /*
- * LiveStretchPlayer.hpp
+ * LiveStretchPlayer.h
  * 基于 TimeStretchEngine 的播放器封装层，提供：
  *   - 独立的后台音频线程，以固定时间间隔驱动 process()
  *   - 支持加载完整音频文件（平面格式）
@@ -39,7 +39,7 @@
  *   player.setAudioCallback([](const float* data, int frames, int ch) {
  *       // 将 data 交给声卡驱动或 NAPI 回调
  *   });
- *   player.loadAudio(planarData,  totalFrames);
+ *   player.loadAudio(planarData, totalFrames);
  *   player.play();
  *   player.setSpeed(1.5); // 可随时调速
  *   player.pause();       // 暂停
@@ -53,7 +53,8 @@ public:
      * @brief 构造播放器。
      * @param channels       声道数（1 或 2）
      * @param sampleRate     采样率（Hz），用于计算时间间隔
-     * @param ringBufferSize 环形缓冲区大小（帧数），建议设为文件总帧数或足够大（如 65536）
+     * @param ringBufferSize 环形缓冲区大小（帧数，64 位），建议设为文件总帧数或足够大（如 65536）；
+ *                       超长音频（数小时 384kHz，总帧数 > 2^31）请务必用 64 位值传入
      * @param initialSpeed   初始变速比，默认为 1.0
      * @param blockSize      每次 process() 请求的帧数，默认为 512
      * 
@@ -96,6 +97,21 @@ public:
         return true;
     }
 
+    /**
+     * @brief 设置「暂停期间是否仍向回调输出静音块」。
+     * @param enable true（默认，向后兼容）：暂停时仍回调全零静音块，
+     *               适合下游是「持续运行的混音管线」、需要连续数据流的场景；
+     *               false：暂停时**完全不回调**（不产生任何数据），
+     *               适合「下游声卡已自行 Pause」的场景——此时静音无人消费，
+     *               写进下游缓冲只会把它灌满、并在恢复时播出陈旧静音。
+     *
+     * @note 两种模式下节拍时钟都保持实时推进，恢复时都无"追赶"爆发。
+     *       若下游是 OH_AudioRenderer 且暂停时会调用 Pause，请设为 false。
+     */
+    void setSilenceOnPause(bool enable) {
+        silenceOnPause_.store(enable, std::memory_order_relaxed);
+    }
+
     // ==================== 数据加载（一次性喂入全部音频） ====================
 
     /**
@@ -103,13 +119,13 @@ public:
      * @param data        指向浮点 PCM 数据，排列方式：
      *                     - 单声道：所有样本连续
      *                     - 立体声：先左声道全部样本，紧接着右声道全部样本
-     * @param totalFrames 每个声道的样本数（总帧数）
+     * @param totalFrames 每个声道的样本数（总帧数，64 位，支持超长音频）
      * 
      * @note 此函数会停止当前播放并重置引擎。
      *       数据会在内部被复制到环形缓冲区，调用后可以释放 data。
      *       该函数可在任意线程调用，但会阻塞直到停止完成。
      */
-    void loadAudio(const float* data, int totalFrames) {
+    void loadAudio(const float* data, long long totalFrames) {
         stop(); // 先停止播放
 
         // 保留源数据指针，供 seekTo() 重新喂入使用（借用指针，调用方须保持数据存活）
@@ -127,7 +143,7 @@ public:
         }
 
         engine_.reset();
-        int written = engine_.feedAudio(channelPtrs.data(), totalFrames);
+        long long written = engine_.feedAudio(channelPtrs.data(), totalFrames);
         // 如果容量足够，written 应等于 totalFrames
         engine_.finish(); // 标记输入结束
     }
@@ -138,7 +154,7 @@ public:
      * @brief 当前播放位置（输入音频帧数，绝对位置，含跳转偏移）。
      *        精确值来自引擎内部已消耗输入计数。
      */
-    int getInputPosition() const {
+    long long getInputPosition() const {
         return seekOffset_ + engine_.inputConsumed();
     }
 
@@ -151,7 +167,7 @@ public:
      *      然后按之前的运行/暂停状态恢复。调用方必须保证 loadAudio()
      *      传入的 data 指针仍然有效（本类持有的是借用指针）。
      */
-    bool seekTo(int frameOffset) {
+    bool seekTo(long long frameOffset) {
         if (!sourceData_ || sourceFrames_ <= 0) return false;
         if (frameOffset < 0 || frameOffset >= sourceFrames_) return false;
 
@@ -160,7 +176,7 @@ public:
         stop(); // 停止并等待后台线程退出
 
         engine_.reset();
-        int remaining = sourceFrames_ - frameOffset;
+        long long remaining = sourceFrames_ - frameOffset;
         const float* data = sourceData_ + frameOffset;
 
         // 构建指针数组（平面格式，从偏移处开始）
@@ -178,8 +194,9 @@ public:
         seekOffset_ = frameOffset;
 
         if (wasPlaying) {
-            play();
-            if (wasPaused) pause(); // 保持暂停状态
+            // 直接以「暂停态」启动线程：避免 play() 后紧接 pause() 期间
+            // 音频线程抢先产出一块真实音频（播放中跳转不受影响）
+            startThread(wasPaused);
         }
         return true;
     }
@@ -188,13 +205,10 @@ public:
 
     /** 启动播放（非阻塞，开启后台线程） */
     void play() {
-        if (running_) return;
-        running_ = true;
-        paused_ = false;
-        workThread_ = std::thread(&LiveStretchPlayer::audioLoop, this);
+        startThread(false);
     }
 
-    /** 暂停播放（后台线程继续运行，但停止调用 process，输出静音） */
+    /** 暂停播放（后台线程继续运行，不调用 process；是否输出静音块由 setSilenceOnPause 决定） */
     void pause() {
         paused_ = true;
     }
@@ -250,6 +264,14 @@ public:
 
 private:
     // ---------- 内部辅助 ----------
+    /** 启动后台线程；startPaused 为 true 时线程以暂停态启动（用于暂停中跳转） */
+    void startThread(bool startPaused) {
+        if (running_) return;
+        paused_.store(startPaused, std::memory_order_relaxed);
+        running_ = true;
+        workThread_ = std::thread(&LiveStretchPlayer::audioLoop, this);
+    }
+
     void updateInterval() {
         // 计算每次回调的间隔（毫秒）
         intervalMs_ = static_cast<double>(blockSize_) / sampleRate_ * 1000.0;
@@ -265,12 +287,13 @@ private:
         while (running_) {
             // ---- 暂停状态：输出静音，不消耗引擎数据 ----
             // 注意：静音也按实时节拍输出（与正常处理同频），保证：
-            //   1. 下游（声卡/混音器）在暂停期间获得速率正确的静音流，不饿不溢；
-            //   2. nextWake 全程保持同步，恢复时无缝衔接，不会"追赶"式爆发。
-            //   不要改用固定 sleep_for(1ms)：Windows 定时器精度约 15.6ms，
-            //   Linux/鸿蒙约 1ms，都会让静音以非实时速率输出（暂停时长被压缩或产生洪水）。
+            //   1. 下游（混音器/声卡）在暂停期间获得实时的静音流，不饿不溢；
+            //   2. nextWake 全程保持同步，恢复时无缝衔接，不会"追赶"爆发。
+            //   不要改用固定 sleep_for(1ms)：Windows 定时器精度 ~15.6ms，
+            //   会导致静音以 ~33k 帧/s（非实时）输出，暂停时长被"压缩"。
             if (paused_) {
-                if (audioCallback_) {
+                // silenceOnPause_ 为 false 时完全不回调（见 setSilenceOnPause 说明）
+                if (silenceOnPause_.load(std::memory_order_relaxed) && audioCallback_) {
                     // 产生静音数据（每实例独立缓冲，多播放器并发/不同块大小均安全）
                     audioCallback_(silenceBuf_.data(), blockSize_, channels_);
                 }
@@ -323,11 +346,12 @@ private:
 
     std::atomic<bool> running_;             ///< 线程是否运行
     std::atomic<bool> paused_;              ///< 是否暂停
+    std::atomic<bool> silenceOnPause_{true}; ///< 暂停时是否仍输出静音块（默认 true 保持兼容）
     std::thread workThread_;                ///< 后台工作线程
 
     std::function<void(const float* data, int frames, int channels)> audioCallback_; ///< 数据回调
 
     const float* sourceData_ = nullptr;    ///< 源数据借用指针（seek 时重新喂入用）
-    int sourceFrames_ = 0;                 ///< 源数据总帧数
-    int seekOffset_ = 0;                   ///< 当前跳转偏移（输入帧）
+    long long sourceFrames_ = 0;           ///< 源数据总帧数（64 位）
+    long long seekOffset_ = 0;             ///< 当前跳转偏移（输入帧，64 位）
 };

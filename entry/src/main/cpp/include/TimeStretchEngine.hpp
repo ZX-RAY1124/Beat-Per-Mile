@@ -35,9 +35,9 @@
 template<typename SampleType>
 class AudioRingBuffer {
 public:
-    AudioRingBuffer(int channels, int capacityFrames)
-        : channels_(channels), capacity_(capacityFrames),
-          data_(static_cast<size_t>(channels) * capacityFrames, SampleType(0)) {
+    AudioRingBuffer(int channels, long long capacityFrames)
+        : channels_(channels), capacity_(static_cast<size_t>(capacityFrames)),
+          data_(static_cast<size_t>(channels) * static_cast<size_t>(capacityFrames), SampleType(0)) {
         readPos_.store(0, std::memory_order_relaxed);
         writePos_.store(0, std::memory_order_relaxed);
     }
@@ -45,25 +45,25 @@ public:
     AudioRingBuffer(const AudioRingBuffer&) = delete;
     AudioRingBuffer& operator=(const AudioRingBuffer&) = delete;
 
-    int write(const SampleType* const* input, int frames) {
+    long long write(const SampleType* const* input, long long frames) {
         if (frames <= 0) return 0;
         size_t writePos = writePos_.load(std::memory_order_relaxed);
         size_t readPos  = readPos_.load(std::memory_order_acquire);
         size_t used = writePos - readPos;
         size_t available = capacity_ - 1 - used;
-        int toWrite = frames;
-        if (toWrite > static_cast<int>(available)) {
-            int overflow = toWrite - static_cast<int>(available);
-            readPos += overflow;
+        long long toWrite = frames;
+        if (toWrite > static_cast<long long>(available)) {
+            long long overflow = toWrite - static_cast<long long>(available);
+            readPos += static_cast<size_t>(overflow);
             readPos_.store(readPos, std::memory_order_release);
             used = writePos - readPos;
             available = capacity_ - 1 - used;
-            if (toWrite > static_cast<int>(available)) {
-                toWrite = static_cast<int>(available);
+            if (toWrite > static_cast<long long>(available)) {
+                toWrite = static_cast<long long>(available);
             }
         }
         size_t startFrame = writePos % capacity_;
-        size_t endFrame   = startFrame + toWrite;
+        size_t endFrame   = startFrame + static_cast<size_t>(toWrite);
         if (endFrame <= static_cast<size_t>(capacity_)) {
             for (int ch = 0; ch < channels_; ++ch) {
                 SampleType* dest = data_.data() + static_cast<size_t>(ch) * capacity_ + startFrame;
@@ -72,7 +72,7 @@ public:
             }
         } else {
             size_t firstPart  = capacity_ - startFrame;
-            size_t secondPart = toWrite - firstPart;
+            size_t secondPart = static_cast<size_t>(toWrite) - firstPart;
             for (int ch = 0; ch < channels_; ++ch) {
                 SampleType* dest1 = data_.data() + static_cast<size_t>(ch) * capacity_ + startFrame;
                 const SampleType* src1 = input[ch];
@@ -82,20 +82,20 @@ public:
                 std::copy(src2, src2 + secondPart, dest2);
             }
         }
-        writePos += toWrite;
+        writePos += static_cast<size_t>(toWrite);
         writePos_.store(writePos, std::memory_order_release);
         return toWrite;
     }
 
-    int read(SampleType* const* output, int frames) {
+    long long read(SampleType* const* output, long long frames) {
         if (frames <= 0) return 0;
         size_t readPos  = readPos_.load(std::memory_order_relaxed);
         size_t writePos = writePos_.load(std::memory_order_acquire);
         size_t available = writePos - readPos;
-        int toRead = std::min(frames, static_cast<int>(available));
+        long long toRead = std::min(frames, static_cast<long long>(available));
         if (toRead <= 0) return 0;
         size_t startFrame = readPos % capacity_;
-        size_t endFrame   = startFrame + toRead;
+        size_t endFrame   = startFrame + static_cast<size_t>(toRead);
         if (endFrame <= static_cast<size_t>(capacity_)) {
             for (int ch = 0; ch < channels_; ++ch) {
                 const SampleType* src = data_.data() + static_cast<size_t>(ch) * capacity_ + startFrame;
@@ -104,7 +104,7 @@ public:
             }
         } else {
             size_t firstPart  = capacity_ - startFrame;
-            size_t secondPart = toRead - firstPart;
+            size_t secondPart = static_cast<size_t>(toRead) - firstPart;
             for (int ch = 0; ch < channels_; ++ch) {
                 const SampleType* src1 = data_.data() + static_cast<size_t>(ch) * capacity_ + startFrame;
                 SampleType* dest1 = output[ch];
@@ -114,15 +114,15 @@ public:
                 std::copy(src2, src2 + secondPart, dest2);
             }
         }
-        readPos += toRead;
+        readPos += static_cast<size_t>(toRead);
         readPos_.store(readPos, std::memory_order_release);
         return toRead;
     }
 
-    int availableRead() const {
+    long long availableRead() const {
         size_t r = readPos_.load(std::memory_order_acquire);
         size_t w = writePos_.load(std::memory_order_acquire);
-        return static_cast<int>(w - r);
+        return static_cast<long long>(w - r);
     }
 
     // 已读出的帧数（读位置），即已被消费的输入帧数
@@ -137,7 +137,7 @@ public:
 
 private:
     int channels_;
-    int capacity_;
+    size_t capacity_;
     std::vector<SampleType> data_;
     std::atomic<size_t> readPos_{0};
     std::atomic<size_t> writePos_{0};
@@ -148,7 +148,11 @@ private:
 // ============================================================================
 class TimeStretchEngine {
 public:
-    TimeStretchEngine(int channels, int sampleRate, int ringBufferSize, double initialSpeed = 1.0)
+    /**
+     * @param ringBufferSize 环形缓冲容量（帧）。支持 >2^31 的超长音频（如数小时 384kHz），
+     *                       故为 64 位；注意容量会实打实占用内存（每帧 channels 个 float）。
+     */
+    TimeStretchEngine(int channels, int sampleRate, long long ringBufferSize, double initialSpeed = 1.0)
         : channels_(channels), sampleRate_(sampleRate), speed_(initialSpeed),
           ringBuffer_(channels, ringBufferSize),
           isFinished_(false), hasPreheated_(false), drained_(false),
@@ -157,13 +161,17 @@ public:
         inputLatency_ = static_cast<int>(stretcher_.inputLatency());
         outputLatency_ = static_cast<int>(stretcher_.outputLatency());
 
+        // 单次 process() 可消耗的输入上限，同时也是临时缓冲大小。
+        // 与环形缓冲容量解耦并封顶，否则超长音频（容量达数十亿帧）会让临时缓冲爆内存。
+        const long long kChunkCap = 1LL << 20;   // 约 100 万帧
         maxInputFrames_ = ringBufferSize / 2;
+        if (maxInputFrames_ > kChunkCap) maxInputFrames_ = kChunkCap;
         if (maxInputFrames_ < 256) maxInputFrames_ = 256;
 
         tempInput_.resize(channels);
         tempInputBuffers_.resize(channels);
         for (int ch = 0; ch < channels; ++ch) {
-            tempInputBuffers_[ch].resize(maxInputFrames_ + inputLatency_ + 64);
+            tempInputBuffers_[ch].resize(static_cast<size_t>(maxInputFrames_) + inputLatency_ + 64);
             tempInput_[ch] = tempInputBuffers_[ch].data();
         }
 
@@ -180,7 +188,8 @@ public:
     TimeStretchEngine(const TimeStretchEngine&) = delete;
     TimeStretchEngine& operator=(const TimeStretchEngine&) = delete;
 
-    int feedAudio(const float* const* input, int frames) {
+    /** @param frames 本次喂入的帧数（64 位，支持一次性喂入整首长音频）；返回实际写入帧数 */
+    long long feedAudio(const float* const* input, long long frames) {
         if (frames <= 0 || isFinished_) return 0;
         return ringBuffer_.write(input, frames);
     }
@@ -231,23 +240,23 @@ public:
         // ---- 正常处理 ----
         // 关键修复：按比例消耗输入，不再额外加 inputLatency_
         double currentSpeed = speed_.load(std::memory_order_relaxed);
-        int neededInput = static_cast<int>(std::ceil(outputFrames * currentSpeed));
+        long long neededInput = static_cast<long long>(std::ceil(outputFrames * currentSpeed));
         if (neededInput > maxInputFrames_) {
-            int maxOutput = static_cast<int>(maxInputFrames_ / speed_);
+            long long maxOutput = static_cast<long long>(maxInputFrames_ / speed_);
             if (maxOutput < 1) maxOutput = 1;
-            outputFrames = maxOutput;
+            outputFrames = static_cast<int>(std::min<long long>(maxOutput, outputFrames));
             neededInput = maxInputFrames_;
         }
 
-        int actualRead = ringBuffer_.read(tempInput_.data(), neededInput);
+        long long actualRead = ringBuffer_.read(tempInput_.data(), neededInput);
         if (actualRead < neededInput) {
             for (int ch = 0; ch < channels_; ++ch) {
-                std::fill(tempInputBuffers_[ch].begin() + actualRead,
-                          tempInputBuffers_[ch].begin() + neededInput, 0.0f);
+                std::fill(tempInputBuffers_[ch].begin() + static_cast<size_t>(actualRead),
+                          tempInputBuffers_[ch].begin() + static_cast<size_t>(neededInput), 0.0f);
             }
         }
 
-        stretcher_.process(tempInput_.data(), neededInput, output, outputFrames);
+        stretcher_.process(tempInput_.data(), static_cast<int>(neededInput), output, outputFrames);
         return outputFrames;
     }
 
@@ -263,9 +272,16 @@ public:
      *        等于环形缓冲区的读位置：每次 process() 真实读取了多少输入帧。
      *        用于上层实现播放进度显示。
      */
-    int inputConsumed() const {
-        return static_cast<int>(ringBuffer_.readPosition());
+    long long inputConsumed() const {
+        return static_cast<long long>(ringBuffer_.readPosition());
     }
+
+    /**
+     * @brief 单次 process() 可消耗输入帧数的上限（= 内部临时缓冲大小）。
+     *        与环形缓冲容量解耦并封顶（约 100 万帧），避免超长音频导致临时缓冲爆内存。
+     *        仅供诊断/测试使用。
+     */
+    long long maxInputChunkFrames() const { return maxInputFrames_; }
 
     void reset() {
         ringBuffer_.reset();
@@ -296,7 +312,7 @@ private:
     bool drained_;
     int inputLatency_;
     int outputLatency_;
-    int maxInputFrames_;
+    long long maxInputFrames_;
 
     std::vector<float*> tempInput_;
     std::vector<std::vector<float>> tempInputBuffers_;
