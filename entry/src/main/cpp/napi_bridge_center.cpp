@@ -7,10 +7,65 @@
 #include <thread>
 #include "LiveStretchPlayer.h"
 #include <cstring>
+#include <algorithm>
 // 暂时不引用 essentia，先验证编译链路没问题
+
+// ─── 播放用环形缓冲区：实现真正的流式生产者-消费者 ───
+class PlaybackRingBuffer {
+public:
+    PlaybackRingBuffer(size_t capacity) : buffer_(capacity), capacity_(capacity) {}
+
+    /** 生产者写入数据，返回实际写入的 float 个数 */
+    size_t write(const float* data, size_t count) {
+        size_t space = capacity_ - fill_;
+        size_t toWrite = std::min(count, space);
+        for (size_t i = 0; i < toWrite; i++) {
+            buffer_[writePos_] = data[i];
+            writePos_ = (writePos_ + 1) % capacity_;
+        }
+        fill_ += toWrite;
+        return toWrite;
+    }
+
+    /** 消费者读取数据，返回实际读取的 float 个数 */
+    size_t read(float* out, size_t count) {
+        size_t toRead = std::min(count, fill_);
+        for (size_t i = 0; i < toRead; i++) {
+            out[i] = buffer_[readPos_];
+            readPos_ = (readPos_ + 1) % capacity_;
+        }
+        fill_ -= toRead;
+        return toRead;
+    }
+
+    size_t available() const { return fill_; }
+    size_t capacity() const { return capacity_; }
+    bool empty() const { return fill_ == 0; }
+    bool full() const { return fill_ == capacity_; }
+
+    void reset() {
+        readPos_ = 0;
+        writePos_ = 0;
+        fill_ = 0;
+    }
+
+private:
+    std::vector<float> buffer_;
+    size_t capacity_;
+    size_t readPos_ = 0;
+    size_t writePos_ = 0;
+    size_t fill_ = 0;
+};
+
+// ════════════════════════════════════════════
 
 static OH_AudioRenderer* audioRenderer;
 static OH_AudioStreamBuilder* builder;                   //音频流构建器
+
+#undef LOG_DOMAIN
+#undef LOG_TAG
+#define LOG_DOMAIN 0x3200   // 0x0000 ~ 0xFFFF，自定义业务领域
+#define LOG_TAG   "MyTag"   // 标识模块，不能为NULL
 
 // 自定义上下文结构体
 struct TsfnContext {
@@ -22,22 +77,24 @@ struct TsfnContext {
     std::string fileName;
     std::thread worker;
     
-    int downloadId;    //播放任务id
+    int playerId;    //播放任务id
 };
 
 struct music_data {
     int block_num;
-    std::vector<float> proceed_data;
     int32_t audioDataSize;
+    double accelerate = 1.0;
+
 };
 
 // ─── 全局任务管理器（用于按ID查找上下文） ───
 static std::unordered_map<int, TsfnContext *> g_downloadMap;
 static std::mutex g_mapMutex;
+static std::mutex g_dataMutex;                        // 保护 dataClip & ring buffer 并发访问
 static int g_nextId = 1; 
-static music_data* dataClip;
-static std::atomic<long long> g_lastCallbackMs;     //最后一次回调时间
-size_t g_writePosition = 0;          // 当前写入位置（按 float 个数计）
+static music_data* dataClip = nullptr;
+static PlaybackRingBuffer g_ringBuffer(48000 * 2 * 2);   // 2秒立体声 PCM 容量 (192000 floats, 兼容44.1k~48k)
+static std::atomic<long long> g_lastCallbackMs;       //最后一次回调时间
 bool g_isPlaybackFinished = false;
 
 
@@ -47,21 +104,17 @@ static OH_AudioData_Callback_Result OnWriteData_New(
     void* userData,
     void* buffer,
     int32_t bufferLen){
-        size_t remainingFloats = dataClip->proceed_data.size() - g_writePosition;
-        size_t bytesAvailable = remainingFloats * sizeof(float);
-        size_t bytesToWrite = (bufferLen < bytesAvailable) ? bufferLen : bytesAvailable;
-    
-        if(bytesToWrite > 0){
-    
-            std::memcpy(buffer, dataClip->proceed_data.data() + g_writePosition, bytesToWrite);
-            g_writePosition += bytesToWrite / sizeof(float);
+        OH_LOG_INFO(LOG_APP, "register data...");
+        std::lock_guard<std::mutex> lock(g_dataMutex);
+        size_t floatCount = static_cast<size_t>(bufferLen) / sizeof(float);
+        size_t floatsRead = g_ringBuffer.read(static_cast<float*>(buffer), floatCount);
+
+        // 如果环形缓冲区数据不足，用静音填充剩余部分
+        if (floatsRead < floatCount) {
+            float* buf = static_cast<float*>(buffer);
+            std::memset(buf + floatsRead, 0, (floatCount - floatsRead) * sizeof(float));
+            OH_LOG_WARN(LOG_APP, "underrun: need %{public}zu, got %{public}zu", floatCount, floatsRead);
         }
-        if (bytesToWrite < static_cast<size_t>(bufferLen)) {
-            uint8_t* buf = static_cast<uint8_t*>(buffer);
-            std::memset(buf + bytesToWrite, 0, bufferLen - bytesToWrite);
-    } else {
-        std::memset(buffer, 0, bufferLen);
-    }
     return AUDIO_DATA_CALLBACK_RESULT_VALID;
     
     };
@@ -71,7 +124,7 @@ static void OnInterruptEvent_New(
     void* userData,
     OH_AudioInterrupt_ForceType type,
     OH_AudioInterrupt_Hint hint){
-    
+        
     //改
     };
 
@@ -82,11 +135,12 @@ static void OnError_New(
     void* userData,
     OH_AudioStream_Result error
 ){
-
+    OH_LOG_ERROR(LOG_APP, "Face Error in load the audio");
              //改
 };
 
 static napi_value AudioRendererInit(napi_env env, napi_callback_info info){
+    OH_LOG_INFO(LOG_APP, "Now Add AudioRenderer");
     if (audioRenderer){            //事先清理
         OH_AudioRenderer_Release(audioRenderer);
         OH_AudioStreamBuilder_Destroy(builder);
@@ -104,7 +158,7 @@ static napi_value AudioRendererInit(napi_env env, napi_callback_info info){
     OH_AudioStreamBuilder_SetChannelCount(builder, channelCount);
     
     // 设置音频采样格式。
-    OH_AudioStreamBuilder_SetSampleFormat(builder, AUDIOSTREAM_SAMPLE_S32LE);
+    OH_AudioStreamBuilder_SetSampleFormat(builder, AUDIOSTREAM_SAMPLE_F32LE);
     // 设置音频流的编码类型。
     OH_AudioStreamBuilder_SetEncodingType(builder, AUDIOSTREAM_ENCODING_TYPE_RAW);
     // 设置输出音频流的工作场景。
@@ -134,6 +188,7 @@ static napi_value Add(napi_env env, napi_callback_info info)
 
     napi_value sum;
     napi_create_double(env, value0 + value1, &sum);       //计算结果并且将返回值丢给 sum   
+    OH_LOG_INFO(LOG_APP, "used Add");
     return sum;
 }
 
@@ -181,6 +236,15 @@ static napi_value test_audio(napi_env env, napi_callback_info info){       //测
     
 }
 
+static napi_value speedChange(napi_env env,napi_callback_info info){
+    double speed;
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    napi_get_value_double(env, args[0], &speed);
+    dataClip->accelerate = speed;
+    return nullptr;
+}
 
 static void TsfnFinalizeCallback(napi_env env, void *finalizeData, void *finalizeHint) {
     auto *ctx = static_cast<TsfnContext *>(finalizeData);
@@ -197,7 +261,7 @@ static void clear(TsfnContext* ctx){
     napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
     {
         std::lock_guard<std::mutex> lock(g_mapMutex);
-        g_downloadMap.erase(ctx->downloadId);
+        g_downloadMap.erase(ctx->playerId);
     }
     delete ctx;
 }
@@ -205,50 +269,76 @@ static void clear(TsfnContext* ctx){
 
 
 static void WorkerThread(TsfnContext *ctx, char filePath[]){
-    bool finished;
-    bool quit;
+    bool finished = false;
+    bool quit = false;
     //============分析音频=============
     napi_acquire_threadsafe_function(ctx->tsfn);
     //work
     audio_processor audio_processor;
     audio_processor.load_audio(filePath);            //音频位置
     
-    
+    // 使用源音频采样率覆盖 builder（源文件 vs 硬编码 48kHz）
+    OH_AudioStreamBuilder_SetSamplingRate(builder, audio_processor.sample_rate);
     OH_AudioStreamBuilder_GenerateRenderer(builder, &audioRenderer);   
     
     //===========LiveStretchPlayer==============
     LiveStretchPlayer player(2, audio_processor.sample_rate, audio_processor.total_frame, 1.0, 512);
-    dataClip->block_num = 0;
+    if (dataClip == nullptr) {
+        dataClip = new music_data();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_dataMutex);
+        dataClip->block_num = 0;
+    }
     player.setAudioCallback([](const float* data, int frame, int ch) {
         g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
 
         int sampleCount = frame * ch;      //本块采样总数
-        dataClip->proceed_data.assign(data, data + sampleCount);
-        dataClip->block_num += 1;
+
+        // ── planar → interleaved 转换 ──
+        // LiveStretchPlayer 输出为 planar: LLL...RRR...
+        // AudioRenderer 需要 interleaved: LRLRLR...
+        auto* interleaved = new float[static_cast<size_t>(sampleCount)];
+        for (int c = 0; c < ch; c++) {
+            for (int i = 0; i < frame; i++) {
+                interleaved[i * ch + c] = data[c * frame + i];
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_dataMutex);
+            g_ringBuffer.write(interleaved, static_cast<size_t>(sampleCount));
+            dataClip->block_num += 1;
+        }
+        delete[] interleaved;
     });
     
     player.loadAudio(audio_processor.make_planner_data(), audio_processor.total_frame);
     
-    player.play();    
-    OH_AudioRenderer_Start(audioRenderer);
+    player.play();                                     //加载音频流
+    OH_AudioRenderer_Start(audioRenderer);            //开始播放
     
     //播放器循环
     while(!finished && !quit){
-        
+        player.setSpeed(dataClip->accelerate);
         if(ctx->cancelled.load()){
             quit = true;
-            clear(ctx);
             OH_AudioRenderer_Stop(audioRenderer);
+            clear(ctx);
+            continue;
 
         }
         
         while (ctx->paused.load()) {
             if(ctx->cancelled.load()){
                 quit = true;
-                clear(ctx);
                 OH_AudioRenderer_Stop(audioRenderer);
+                clear(ctx);
+                break;
             }
+            player.pause();
         }
+        player.resume();
+
         
         if(!finished && !quit){
             //判断结束
@@ -260,14 +350,16 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
             }
             
         }
+        
         napi_call_threadsafe_function(ctx->tsfn, dataClip, napi_tsfn_nonblocking);          //回调函数
+        
     }
     player.stop();
     if(finished){
         OH_LOG_INFO(LOG_APP, "DONE");
+        clear(ctx);
     }
     
-    clear(ctx);
     return;
     
 }
@@ -275,16 +367,17 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
 
 
 static void CallJSCallback(napi_env env, napi_value jsCallback, void *context, void *data){
-    if(data == nullptr)
+    if(dataClip == nullptr)
         return;
+    std::lock_guard<std::mutex> lock(g_dataMutex);
     music_data* callBackData = static_cast<music_data *>(dataClip);
 
     napi_value music_data = nullptr;
-    
+    napi_create_int32(env, callBackData->block_num, &music_data);
     //回调
-    napi_value undefined = nullptr;
-    napi_get_undefined(env, &undefined);
-    napi_call_function(env, undefined, jsCallback, 1, &music_data, nullptr);
+    napi_value global = nullptr;
+    napi_get_global(env, &global);
+    napi_call_function(env, global, jsCallback, 1, &music_data, nullptr);
     
    // delete progressData;
 }
@@ -305,7 +398,7 @@ static napi_value musicPause(napi_env env, napi_callback_info info){
     auto it = g_downloadMap.find(id);
     if (it != g_downloadMap.end()) {
         it->second->paused.store(true);
-        OH_LOG_INFO(LOG_APP, "[NAPI] Music %d paused", id);
+        OH_LOG_INFO(LOG_APP, "[NAPI] Music %{public}d paused", id);
     }
     return nullptr;
 
@@ -317,14 +410,20 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     
     int id;
-    
-    OH_AudioRenderer_Start(audioRenderer);              //继续播放
     napi_get_value_int32(env, args[0], &id);
-    std::lock_guard<std::mutex> lock(g_mapMutex);
-    auto it = g_downloadMap.find(id);
-    if(it != g_downloadMap.end()) {
-        it->second->paused.store(false);
+    
+    // 先取消暂停标记 → WorkerThread 退出暂停循环 → player.resume() → 环形缓冲区开始被填充
+    {
+        std::lock_guard<std::mutex> lock(g_mapMutex);
+        auto it = g_downloadMap.find(id);
+        if(it != g_downloadMap.end()) {
+            it->second->paused.store(false);
+        }
     }
+    
+    // 最后启动 AudioRenderer（此时环形缓冲区已有数据，避免 underrun）
+    OH_AudioRenderer_Start(audioRenderer);
+    
     return nullptr;
 }
 
@@ -343,7 +442,7 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
     if (it != g_downloadMap.end()) {
         it->second->cancelled.store(true);
         it->second->paused.store(false); 
-        OH_LOG_INFO(LOG_APP, "[NAPI] Download %d cancelled", id);
+        OH_LOG_INFO(LOG_APP, "[NAPI] Download %{public}d cancelled", id);
     }
 
     return nullptr;
@@ -366,6 +465,7 @@ static napi_value AudioRendererRelease(napi_env env, napi_callback_info info){
 
 
 static napi_value musicPlay(napi_env env, napi_callback_info info){
+    OH_LOG_INFO(LOG_APP, "[NAPI] Now loading music play");
     size_t argc = 2;
     napi_value args[2] = {nullptr};
     napi_value jsCallback = nullptr;
@@ -378,6 +478,8 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
     memset(buf, 0, strLen + 1);
     sourceStatus = napi_get_value_string_utf8(env, args[0], buf, strLen + 1, &strLen);
     
+    OH_LOG_INFO(LOG_APP, "Step2 status: %d, length: %zu, buf[0]=%d, buf=%s",
+    sourceStatus, strLen, buf[0], buf);
     
 
     //创建上下文
@@ -391,8 +493,8 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
 
     {
         std::lock_guard<std::mutex> lock(g_mapMutex);
-        ctx->downloadId = g_nextId++;
-        g_downloadMap[ctx->downloadId] = ctx;
+        ctx->playerId = g_nextId++;
+        g_downloadMap[ctx->playerId] = ctx;
         
     }
     
@@ -403,14 +505,17 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
                                     10,
                                     1,
                                     ctx,
-                                    TsfnFinalizeCallback,      //回调销毁（改）
+                                    TsfnFinalizeCallback,      //回调销毁
                                     nullptr,
                                     CallJSCallback,       //主线程真正的回调
                                     &ctx->tsfn);
-    OH_AudioRenderer_Start(audioRenderer);               //开始播放
     ctx->worker = std::thread(WorkerThread, ctx, buf);
+    OH_LOG_INFO(LOG_APP, "Add sub thread");
     ctx->worker.detach();
-    return nullptr;
+    
+    napi_value progressId;
+    napi_create_int32(env, ctx->playerId, &progressId);
+    return progressId;
     
 }
 
@@ -433,7 +538,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"music_cancel", nullptr, musicCancel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"music_pause", nullptr, musicPause, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"audioRendererInit", nullptr, AudioRendererInit, nullptr, nullptr, nullptr, napi_writable, nullptr},
-        {"audioRendererRelease", nullptr, AudioRendererRelease, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"audioRendererRelease", nullptr, AudioRendererRelease, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"changeSpeed", nullptr, speedChange, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

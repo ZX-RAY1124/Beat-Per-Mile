@@ -5,6 +5,11 @@
 // please include "napi/native_api.h".
 
 #include "audio_process.h"
+#include "hilog/log.h"
+#undef LOG_DOMAIN
+#undef LOG_TAG
+#define LOG_DOMAIN 0x3200   // 0x0000 ~ 0xFFFF，自定义业务领域
+#define LOG_TAG   "MyTag"   // 标识模块，不能为NULL
 
 audio_processor::audio_processor(){
     avformat_network_init();
@@ -12,21 +17,41 @@ audio_processor::audio_processor(){
 
 void audio_processor::load_audio(char file_path[]){
    // ======="ffmpeg"========
-    AVFormatContext *formatCtx = avformat_alloc_context();
-    if(avformat_open_input(&formatCtx, file_path, NULL, NULL) != 0){
+    AVFormatContext *formatCtx = nullptr;
+    file_path_ = file_path;
+    int ret = avformat_open_input(&formatCtx, file_path, nullptr, nullptr);
+    
+    
+    
+    if(ret != 0){
         // open fail
+        char errBuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+        av_strerror(ret, errBuf, sizeof(errBuf));
+        // 打印到控制台或日志
+        OH_LOG_ERROR(LOG_APP, "avformat_open_input failed! ret=%{public}d, err=%{public}s", 
+                 ret, errBuf);
+        delete [] file_path;
+        
+        quickCheck();
+        
+        
+        openfail = true;
         return;
     }
-    if(avformat_find_stream_info(formatCtx, NULL) < 0) {
+    if(avformat_find_stream_info(formatCtx, nullptr) < 0) {
         //get fail
+        loadfail = true;
+        avformat_close_input(&formatCtx);
         return;
     }
     //查找音频流索引
     int audioStreamIdx = av_find_best_stream(formatCtx, AVMEDIA_TYPE_AUDIO, -1,-1,NULL,0);
     if (audioStreamIdx < 0){
         //未找到音频流
+        avformat_close_input(&formatCtx);
         return;
     }
+    delete [] file_path;
     //初始化编码器
     AVCodecParameters *codecParams = formatCtx->streams[audioStreamIdx]->codecpar;
     AVCodec *codec = avcodec_find_decoder(codecParams->codec_id);
@@ -62,53 +87,109 @@ void audio_processor::load_audio(char file_path[]){
     
     //释放资源并关闭解码器
     avcodec_close(codecCtx);
+    avformat_close_input(&formatCtx);
     
     
 }
+
+void audio_processor::quickCheck() {
+    OH_LOG_INFO(LOG_APP, "========== 快速诊断 ==========");
+    
+    // 1️⃣ 检查 wav demuxer（这是核心！）
+    const AVInputFormat* wavFmt = av_find_input_format("wav");
+    if (wavFmt) {
+        OH_LOG_INFO(LOG_APP, "[✅] wav demuxer 存在: %{public}s", wavFmt->name);
+    } else {
+        OH_LOG_ERROR(LOG_APP, "[❌] wav demuxer 不存在！被裁剪了！");
+    }
+    
+    // 2️⃣ 检查所有 demuxer 中是否包含 wav 相关
+    void* opaque = nullptr;
+    const AVInputFormat* fmt = nullptr;
+    bool foundWav = false;
+    while ((fmt = av_demuxer_iterate(&opaque))) {
+        if (fmt->name && strstr(fmt->name, "wav")) {
+            OH_LOG_INFO(LOG_APP, "[✅] 找到 demuxer: %{public}s", fmt->name);
+            foundWav = true;
+        }
+    }
+    if (!foundWav) {
+        OH_LOG_ERROR(LOG_APP, "[❌] 没有任何 wav 相关的 demuxer！");
+    }
+    
+    OH_LOG_INFO(LOG_APP, "==============================");
+}
+
 
 void audio_processor::process_audio(AVFrame *frame) {
     if (!frame) return;
     enum AVSampleFormat fmt = (enum AVSampleFormat)frame->format;
     int channels = frame->channels;
     int nb_samples = frame->nb_samples;
-    int is_planer = av_sample_fmt_is_planar(fmt);
-    
-    int bps = av_get_bytes_per_sample(fmt);
-    if (bps <= 0) return;  // 安全保护
+    int is_planar = av_sample_fmt_is_planar(fmt);
+
     this->sample_rate = frame->sample_rate;
-    
-    if(is_planer){
-        //遍历每一个声道
-        for(int ch = 0; ch < channels; ch ++) {
-            if(!frame->extended_data[ch]) continue;
-            int valid_bytes = frame->linesize[0];
-            int valid_samples = valid_bytes / bps;
-            // 实际有效样本数不能超过 nb_samples
-            int samples_to_process = FFMIN(nb_samples, valid_samples);
-            
-            // 获取该声道指针
+
+    if (is_planar) {
+        // ── 平面格式：每个声道独立指针 ──
+        for (int ch = 0; ch < channels; ch++) {
+            if (!frame->extended_data[ch]) continue;
             uint8_t *data_ptr = frame->extended_data[ch];
-            // 根据格式转为 int16_t* 或 float* 等
-            float *samples = (float*)data_ptr;  // 假设是 FLTP
-            for (int i = 0; i < samples_to_process; i++) {
-                // 处理 samples[i] （第 ch 声道，第 i 个样本）
-                channel_split(ch, samples[i]);
-                
+
+            for (int i = 0; i < nb_samples; i++) {
+                float sample = 0.0f;
+                switch (fmt) {
+                    case AV_SAMPLE_FMT_FLTP:
+                        sample = ((float *)data_ptr)[i];
+                        break;
+                    case AV_SAMPLE_FMT_S16P:
+                        sample = ((int16_t *)data_ptr)[i] / 32768.0f;
+                        break;
+                    case AV_SAMPLE_FMT_S32P:
+                        sample = ((int32_t *)data_ptr)[i] / 2147483648.0f;
+                        break;
+                    case AV_SAMPLE_FMT_U8P:
+                        sample = ((uint8_t *)data_ptr)[i] / 128.0f - 1.0f;
+                        break;
+                    case AV_SAMPLE_FMT_DBLP:
+                        sample = (float)((double *)data_ptr)[i];
+                        break;
+                    default:
+                        sample = 0.0f;
+                        break;
+                }
+                channel_split(ch, sample);
             }
-            
         }
     } else {
+        // ── 交错格式：单个缓冲区，声道交错排列 ──
         if (!frame->extended_data[0]) return;
-        int total_samples = channels * nb_samples;
-        int valid_bytes = frame->linesize[0];
-        int valid_samples = valid_bytes / bps;
-        int samples_to_process = FFMIN(total_samples, valid_samples);
         uint8_t *data_ptr = frame->extended_data[0];
-        float *samples = (float*)data_ptr;  // 假设是 FLT
-        for (int i = 0; i < samples_to_process; i++) {
-            channel_split(i % channels, samples[i]);
+
+        for (int i = 0; i < nb_samples * channels; i++) {
+            float sample = 0.0f;
+            switch (fmt) {
+                case AV_SAMPLE_FMT_FLT:
+                    sample = ((float *)data_ptr)[i];
+                    break;
+                case AV_SAMPLE_FMT_S16:
+                    sample = ((int16_t *)data_ptr)[i] / 32768.0f;
+                    break;
+                case AV_SAMPLE_FMT_S32:
+                    sample = ((int32_t *)data_ptr)[i] / 2147483648.0f;
+                    break;
+                case AV_SAMPLE_FMT_U8:
+                    sample = ((uint8_t *)data_ptr)[i] / 128.0f - 1.0f;
+                    break;
+                case AV_SAMPLE_FMT_DBL:
+                    sample = (float)((double *)data_ptr)[i];
+                    break;
+                default:
+                    sample = 0.0f;
+                    break;
+            }
+            channel_split(i % channels, sample);
         }
-        
     }
 }
 

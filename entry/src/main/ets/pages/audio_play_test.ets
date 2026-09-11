@@ -5,10 +5,17 @@ import { audio } from '@kit.AudioKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { audioRendererInit, changeSpeed, music_cancel, music_pause, music_play, music_resume } from 'libentry.so';
+import { fileIo } from '@kit.CoreFileKit';
+
+
+
 
 @Component
 struct audio_test {
   @State navPathStack: NavPathStack = new NavPathStack();
+  player:number|undefined = undefined;
+  speed:number = 1.0;
 
   aboutToAppear(): void {
     initArguments(this.getUIContext().getHostContext() as common.UIAbilityContext);
@@ -21,11 +28,36 @@ struct audio_test {
 
   build() {
       HdsNavDestination(){
-        Column(){
+        Column({space:20}){
           Button("播放").width(60).height(30).onClick(()=> {if(hadInit){start();}else {initArguments(this.getUIContext().getHostContext() as common.UIAbilityContext);
             init();start();}})
-          Button("暂停").width(60).height(30).onClick(()=> {stop();})
-          Button("终止").width(60).height(30).onClick(()=> {release(this.getUIContext().getHostContext() as common.UIAbilityContext);})
+          Button("暂停").width(60).height(30).onClick(()=> {stop();if(this.player) music_pause(this.player);});
+          Button("终止").width(60).height(30).onClick(()=> {if(this.player) music_cancel(this.player);this.player = undefined;release(this.getUIContext().getHostContext() as common.UIAbilityContext);})
+          Button("初始化Native").width(200).height(40).onClick(()=> {
+            audioRendererInit();       //初始化播放器
+          });
+          Button("从Native播放").width(200).height(40).onClick(()=> {
+            copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "credits.wav").then((audioPath:string) => {
+              if(!this.player) {
+                this.player = music_play(audioPath, (block: number) => {
+                  console.log(block.toString());
+                });
+              } else {
+                music_resume(this.player);
+              }
+            });
+
+
+
+          });
+          Button("加速x0.5").width(120).height(30).onClick(() => {
+            this.speed += 0.5
+            changeSpeed(this.speed);
+          });
+          Button("减速x0.5").width(120).height(30).onClick(() => {
+            this.speed -= 0.5
+            changeSpeed(this.speed);
+          });
         }.justifyContent(FlexAlign.Center).offset({y : 200});
 
       }
@@ -59,6 +91,50 @@ let audioRendererOptions: audio.AudioRendererOptions = {
   rendererInfo: audioRendererInfo
 };
 let writeDataCallback: audio.AudioRendererWriteDataCallback;
+
+
+async function copyRawFileToSandbox(context: common.UIAbilityContext, rawfileName: string): Promise<string> {
+  const filesDir = context.filesDir;
+  const destPath = `${filesDir}/${rawfileName}`;
+
+  // 1. 获取 rawfile 描述符
+  const rawFd = context.resourceManager.getRawFdSync(rawfileName);
+  console.info(`rawfile: fd=${rawFd.fd}, offset=${rawFd.offset}, length=${rawFd.length}`);
+
+  // 2. 创建目标文件
+  const destFile = fileIo.openSync(destPath,
+    fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
+
+  // 3. 分块拷贝（直接基于 fd 读写）
+  const bufferSize = 8192;
+  let remaining = rawFd.length;
+  let currentOffset = rawFd.offset;
+
+  while (remaining > 0) {
+    const toRead = Math.min(bufferSize, remaining);
+    const buf = new ArrayBuffer(toRead);
+
+    // ✅ 从源 fd 的指定偏移位置读取
+    const bytesRead = fileIo.readSync(rawFd.fd, buf, {
+      offset: currentOffset,
+      length: toRead
+    });
+    if (bytesRead <= 0) break;
+
+    // ✅ 写入目标 fd
+    fileIo.writeSync(destFile.fd, buf.slice(0, bytesRead));
+
+    currentOffset += bytesRead;
+    remaining -= bytesRead;
+  }
+
+  // 4. 关闭 fd
+  fileIo.closeSync(destFile);
+
+  console.info(`✅ 拷贝完成: ${destPath}`);
+  return destPath;
+}
+
 
 
 

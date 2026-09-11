@@ -21,6 +21,10 @@ private:
     std::vector<float> res;
     void process_audio(AVFrame *frame);
     void channel_split(int channel, float data);
+    bool openfail;
+    bool loadfail;
+    char *file_path_;
+    void quickCheck();
 public:
     audio_processor();
     std::vector<float> channel_r;

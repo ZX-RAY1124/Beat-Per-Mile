@@ -1,3 +1,10 @@
 export const add: (a: number, b: number) => number;
 export const squire:(a: number, b: number ) => number;
 export const test_audio:(name:string) => string;
+export const music_play: (url:string, callback : (progress: number) => void) => number;
+export const music_resume:(id: number) => void;
+export const music_pause:(id:number) => void;
+export const music_cancel:(id: number) => void;
+export const audioRendererInit:() => void;
+export const audioRendererRelease:() => void;
+export const changeSpeed:(speed: number) => void;
