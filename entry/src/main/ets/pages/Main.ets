@@ -68,6 +68,12 @@ struct Main {
           this.isMenuShow = false
           this.navPathStack.pushPathByName('CurveList_Page', null, true)
         })
+
+      MenuItem({ content: '歌曲列表' })
+        .onClick(() => {
+          this.isMenuShow = false
+          this.navPathStack.pushPathByName('SongList_Page', null, true)
+        })
     }
   }
 

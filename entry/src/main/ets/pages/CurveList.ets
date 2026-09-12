@@ -47,6 +47,20 @@ const CARD_ACCENT: string = '#FF6B6B'; // 恒定BPM 用的描边色
 const LIFT: number = 6;           // 选中时向左上浮起的距离
 
 /**
+ * 描边宽度是"恒定"的，选中与否只切换描边的颜色。
+ * 原因：ArkUI 的描边占据组件内部空间，如果未选中写 0、选中写 6，
+ * 内容区宽度会在选中瞬间变小，曲线预览的右边缘就会猛地往里缩一下
+ * （布局变化立刻生效，动画只作用于描边的绘制）。
+ */
+const CARD_BORDER_LEFT: number = 6;    // 左侧描边（选中时可见）
+const CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
+
+/** 内容到卡片外边缘的目标留白（＝ 描边宽度 + padding，所以 padding 要减去描边） */
+const CARD_INSET_H: number = 16;       // 有曲线预览时，左右留白
+const CARD_INSET_V: number = 14;       // 有曲线预览时，上下留白
+const CARD_INSET_V_TEXT: number = 20;  // 只有一行字时，上下留白
+
+/**
  * 曲线预览：网格 + 折线 + 折线下方淡色面积
  * points / lineColor / fillColor 都是静态参数，父组件重建时不需要更新，所以不加装饰器
  */
@@ -184,18 +198,22 @@ struct CurveCard {
       }
     }
     .width('100%')
+    // padding 要减掉描边宽度：内容到卡片外边缘的留白始终是 CARD_INSET_*
     .padding({
-      left: 16,
-      right: 16,
-      top: this.points.length >= 2 ? 14 : 20,
-      bottom: this.points.length >= 2 ? 14 : 20
+      left: CARD_INSET_H - CARD_BORDER_LEFT,
+      right: CARD_INSET_H - CARD_BORDER_OTHER,
+      top: (this.points.length >= 2 ? CARD_INSET_V : CARD_INSET_V_TEXT) - CARD_BORDER_OTHER,
+      bottom: (this.points.length >= 2 ? CARD_INSET_V : CARD_INSET_V_TEXT) - CARD_BORDER_OTHER
     })
     .backgroundColor(Color.White)
     .borderRadius(CARD_RADIUS)
-    .borderColor(this.accentColor)
-    .borderWidth(this.selected
-      ? { left: 6, top: 1.5, right: 1.5, bottom: 1.5 }
-      : { left: 0, top: 0, right: 0, bottom: 0 })
+    .borderColor(this.selected ? this.accentColor : '#00000000') //未选中＝全透明，宽度仍然占位
+    .borderWidth({
+      left: CARD_BORDER_LEFT,
+      top: CARD_BORDER_OTHER,
+      right: CARD_BORDER_OTHER,
+      bottom: CARD_BORDER_OTHER
+    })
     .shadow(this.selected
       ? { radius: 24, color: '#2E000000', offsetX: 6, offsetY: 10 }
       : { radius: 18, color: '#26000000', offsetX: 0, offsetY: 6 })

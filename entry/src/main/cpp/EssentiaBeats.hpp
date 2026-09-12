@@ -77,15 +77,15 @@ namespace eb {
 struct Options {
     double sample_rate;        // 必须 44100（Essentia 硬性要求）
     bool   explicit_tempo;     // 是否使用下面的 min/max tempo（默认不用，走 Essentia 默认 40/208）
-    double min_tempo;
-    double max_tempo;
+    int    min_tempo;          // 注意是 int：Essentia 的 minTempo/maxTempo 参数就是整数类型
+    int    max_tempo;          // 传 double 会触发 "losing resolution while truncating" 警告
     std::string ffmpeg_exe;    // 仅 ESSENTIA_USE_MONOLOADER==0 时有效
 
     Options()
         : sample_rate(44100.0),
           explicit_tempo(false),
-          min_tempo(40.0),
-          max_tempo(208.0),
+          min_tempo(40),
+          max_tempo(208),
           ffmpeg_exe("ffmpeg") {}
 };
 

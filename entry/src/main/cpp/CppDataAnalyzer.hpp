@@ -11,6 +11,13 @@
 //        2) 参数收敛到一个 Options 结构体，不再用散落的函数默认参数
 //        3) 错误通过返回值/Result::error 报告，库本身不打印任何东西
 //
+//  ── 单 BPM / 多 BPM 两种模式（Options::multi_segment）────────────────────
+//    true （默认）= 多 BPM 段检测：递归分裂，输出若干速度段落，每段有自己的 bpm_start
+//    false        = 单 BPM 模式：整首歌只输出**一个** BPM
+//                   抗混叠（聚类归一化）照做 —— 混叠会被纠正；
+//                   然后用**线性**拟合求全曲平均周期，忽略速度变化趋势
+//                   （bpm_trend 恒为 0、a 恒为 0，bpm_at() 处处相同）
+//
 //  用法（3 行）：
 //      #include "CppDataAnalyzer.hpp"
 //      cda::Result r = cda::analyze_file("song_beats.csv");
@@ -26,6 +33,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -33,6 +41,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#  include <windows.h>
+#endif
 
 namespace cda {
 
@@ -133,6 +145,12 @@ struct Options {
     double multiplier_tol;    // 整数倍判定的容忍度（默认 0.5，超过则不缩放）
     unsigned int seed;        // k-means 随机种子（默认 0 = 固定，保证可复现）
 
+    // ---- 模式开关 ----
+    // true （默认）= 多 BPM 段检测：递归分裂，输出若干速度段落
+    // false        = 单 BPM 模式：整首歌只输出一个平均 BPM
+    //                （抗混叠归一化后做**线性**拟合，忽略速度变化趋势）
+    bool   multi_segment;
+
     Options()
         : r2_threshold(0.99999),
           min_beats(5),
@@ -143,7 +161,8 @@ struct Options {
           kmeans_max_iter(100),
           kmeans_n_init(10),
           multiplier_tol(0.5),
-          seed(0) {}
+          seed(0),
+          multi_segment(true) {}
 };
 
 // 分析结果（高层 API 的返回值）
@@ -350,12 +369,37 @@ inline bool quadratic_regression(const std::vector<double>& x,
     return true;
 }
 
-// ---------- 一个段落的参数估计：聚类归一化 + 二次回归 ----------
-// 这是整个算法的核心：先把"忽长忽短的拍间隔"归一化成均匀拍，
-// 再对归一化序列做二次拟合，得到起始 BPM 与 BPM 变化趋势。
-inline bool estimate_segment_parameters(const std::vector<double>& beats,
-                                        const Options& opt,
-                                        Paragraph& out) {
+namespace detail {
+
+// ---------- 线性回归 y = slope*x + intercept（最小二乘）----------
+// 单 BPM 模式用它替代二次回归：只求一个平均周期，不表达任何趋势。
+inline bool linear_regression(const std::vector<double>& x, const std::vector<double>& y,
+                              double& slope, double& intercept) {
+    const int n = static_cast<int>(x.size());
+    if (n < 2 || static_cast<int>(y.size()) != n) return false;
+    double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    for (int i = 0; i < n; ++i) {
+        sx  += x[i];
+        sy  += y[i];
+        sxx += x[i] * x[i];
+        sxy += x[i] * y[i];
+    }
+    const double denom = static_cast<double>(n) * sxx - sx * sx;
+    if (std::abs(denom) < 1e-12) return false;         // x 全相同，退化成常数
+    slope = (static_cast<double>(n) * sxy - sx * sy) / denom;
+    intercept = (sy - slope * sx) / static_cast<double>(n);
+    return true;
+}
+
+// ---------- 抗混叠归一化（所有估计方式的公共前置步骤）----------
+// 把"忽长忽短的拍间隔"（检测器把两拍并一拍 / 一拍拆两拍造成）统一成均匀拍序列：
+//   ① 对间隔做 k-means
+//   ② 每个间隔归到最接近的整数倍（1/2/3/4），超过容忍度就不缩放
+//   ③ 用倍数把序列均匀化，得到 norm_beats
+// 注意 norm_beats 是"归一化时间轴"，不是真实时间。
+inline bool normalize_beats(const std::vector<double>& beats, const Options& opt,
+                            std::vector<double>& norm_beats) {
+    norm_beats.clear();
     if (static_cast<int>(beats.size()) < opt.min_beats) return false;
 
     std::vector<double> intervals;
@@ -376,13 +420,13 @@ inline bool estimate_segment_parameters(const std::vector<double>& beats,
         ++counts[lbl];
     }
     for (int i = 0; i < opt.kmeans_k; ++i) {
-        if (counts[i] == 0) return false;            // 有空簇 → 无法归一化（与原版一致）
+        if (counts[i] == 0) return false;              // 有空簇 → 无法归一化（与原版一致）
         centers[i] /= static_cast<double>(counts[i]);
     }
     std::sort(centers.begin(), centers.end());
 
-    // ---- 步骤 2：每个间隔归到最接近的整数倍，得到归一化序列 ----
-    const double base_center = centers[0];           // 最小簇 = 基本拍
+    // ---- 步骤 2：每个间隔归到最接近的整数倍 ----
+    const double base_center = centers[0];             // 最小簇 = 基本拍
     std::vector<double> multipliers(intervals.size(), 1.0);
     for (size_t i = 0; i < intervals.size(); ++i) {
         const double ratio = centers[labels[i]] / base_center;
@@ -396,7 +440,7 @@ inline bool estimate_segment_parameters(const std::vector<double>& beats,
         multipliers[i] = best_mult;
     }
 
-    std::vector<double> norm_beats;
+    // ---- 步骤 3：用倍数把序列均匀化 ----
     norm_beats.reserve(beats.size());
     norm_beats.push_back(beats[0]);
     for (size_t i = 1; i < beats.size(); ++i) {
@@ -404,6 +448,38 @@ inline bool estimate_segment_parameters(const std::vector<double>& beats,
         const double norm_interval = raw_interval / multipliers[i - 1];
         norm_beats.push_back(norm_beats.back() + norm_interval);
     }
+    return true;
+}
+
+// ---------- 拟合优度：R² 与 RMSE ----------
+inline void fit_quality(const std::vector<double>& actual, const std::vector<double>& pred,
+                        double& r2, double& rmse) {
+    const size_t n = actual.size();
+    if (n == 0 || pred.size() != n) { r2 = 0.0; rmse = 0.0; return; }
+    double mean = 0.0;
+    for (size_t i = 0; i < n; ++i) mean += actual[i];
+    mean /= static_cast<double>(n);
+    double ss_res = 0.0, ss_tot = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        const double d = actual[i] - pred[i];
+        ss_res += d * d;
+        ss_tot += (actual[i] - mean) * (actual[i] - mean);
+    }
+    rmse = std::sqrt(ss_res / static_cast<double>(n));
+    r2 = (ss_tot > 0.0) ? (1.0 - ss_res / ss_tot) : 0.0;
+}
+
+}  // namespace detail
+
+// ---------- 一个段落的参数估计：聚类归一化 + 二次回归 ----------
+// 这是整个算法的核心：先把"忽长忽短的拍间隔"归一化成均匀拍，
+// 再对归一化序列做二次拟合，得到起始 BPM 与 BPM 变化趋势。
+inline bool estimate_segment_parameters(const std::vector<double>& beats,
+                                        const Options& opt,
+                                        Paragraph& out) {
+    // ---- 抗混叠归一化（公共前置步骤，实现见 detail::normalize_beats）----
+    std::vector<double> norm_beats;
+    if (!detail::normalize_beats(beats, opt, norm_beats)) return false;
 
     // ---- 步骤 3：二次回归 t(n) = a*n^2 + b*n + c ----
     std::vector<double> x(norm_beats.size());
@@ -419,17 +495,13 @@ inline bool estimate_segment_parameters(const std::vector<double>& beats,
     const double bpm_trend = -60.0 * period_trend / (p0 * p0);
 
     // ---- 步骤 5：拟合优度 R² 与残差 RMSE ----
-    double ss_tot = 0.0, ss_res = 0.0, mean_norm = 0.0;
-    for (size_t i = 0; i < norm_beats.size(); ++i) mean_norm += norm_beats[i];
-    mean_norm /= static_cast<double>(norm_beats.size());
+    std::vector<double> pred(norm_beats.size());
     for (size_t i = 0; i < norm_beats.size(); ++i) {
         const double dn = static_cast<double>(i);
-        const double pred = a * dn * dn + b * dn + c;
-        ss_res += (norm_beats[i] - pred) * (norm_beats[i] - pred);
-        ss_tot += (norm_beats[i] - mean_norm) * (norm_beats[i] - mean_norm);
+        pred[i] = a * dn * dn + b * dn + c;
     }
-    const double rmse = std::sqrt(ss_res / static_cast<double>(norm_beats.size()));
-    const double r2 = (ss_tot > 0.0) ? (1.0 - ss_res / ss_tot) : 0.0;
+    double r2 = 0.0, rmse = 0.0;
+    detail::fit_quality(norm_beats, pred, r2, rmse);
 
     out.start = beats.front();
     out.end = beats.back();
@@ -442,12 +514,64 @@ inline bool estimate_segment_parameters(const std::vector<double>& beats,
     return true;
 }
 
+// ---------- 单 BPM 估计：抗混叠归一化 + **线性**回归 ----------
+// 与 estimate_segment_parameters 的区别只有两点：
+//   ① 用线性模型 t(n) = b*n + c（只有一个周期，不表达"越来越快/越来越慢"）
+//   ② a 恒为 0、bpm_trend 恒为 0，bpm_at() 在任何拍上都返回同一个 BPM
+// 抗混叠步骤完全一样 —— 混叠会被纠正，但整首歌只给一个平均 BPM。
+// 注意：单 BPM 模式**不做置信度剪枝**，只要拟合成功就返回一个结果。
+inline bool estimate_single_bpm(const std::vector<double>& beats,
+                                const Options& opt,
+                                Paragraph& out) {
+    std::vector<double> norm_beats;
+    if (!detail::normalize_beats(beats, opt, norm_beats)) return false;
+
+    std::vector<double> x(norm_beats.size());
+    for (size_t i = 0; i < norm_beats.size(); ++i) x[i] = static_cast<double>(i);
+
+    double period = 0.0, first_beat = 0.0;
+    if (!detail::linear_regression(x, norm_beats, period, first_beat)) return false;
+    if (period <= 0.0) return false;                   // 周期非正 → 数据异常
+
+    std::vector<double> pred(norm_beats.size());
+    for (size_t i = 0; i < norm_beats.size(); ++i)
+        pred[i] = period * static_cast<double>(i) + first_beat;
+    double r2 = 0.0, rmse = 0.0;
+    detail::fit_quality(norm_beats, pred, r2, rmse);
+
+    out.start = beats.front();
+    out.end = beats.back();
+    out.a = 0.0;                                       // 线性模型没有二次项
+    out.b = period;
+    out.c = first_beat;
+    out.bpm_start = 60.0 / period;                     // 全曲唯一的 BPM
+    out.bpm_trend = 0.0;                               // 忽略速度变化趋势
+    out.r2 = r2;
+    out.rmse = rmse;
+    out.beat_count = static_cast<int>(beats.size());
+    return true;
+}
+
+// ---------- 单 BPM 模式入口：整首歌只输出一个段落 ----------
+inline std::vector<Paragraph> detect_single_bpm(const std::vector<double>& beats,
+                                                const Options& opt) {
+    std::vector<Paragraph> result;
+    if (static_cast<int>(beats.size()) < opt.min_beats) return result;   // 太短，估不出来
+    Paragraph whole;
+    if (!estimate_single_bpm(beats, opt, whole)) return result;
+    result.push_back(whole);
+    return result;
+}
+
 // ---------- 递归动态 BPM 检测（核心入口，低层版）----------
 // 返回按时间顺序排列的速度段落。正常情况不会返回空——
 // 只有当输入太短、或整体置信度低且时长短时才会是空。
 inline std::vector<Paragraph> detect_dynamic_bpm(const std::vector<double>& beats,
                                                  const Options& opt,
                                                  int depth = 0) {
+    // ---- 单 BPM 模式：整首歌只给一个平均 BPM，不做任何分裂 ----
+    if (!opt.multi_segment) return detect_single_bpm(beats, opt);
+
     std::vector<Paragraph> result;
     if (static_cast<int>(beats.size()) < opt.min_beats) return result;
 
@@ -529,9 +653,49 @@ inline std::vector<Paragraph> detect_dynamic_bpm(const std::vector<double>& beat
 //  3. CSV 读写
 // ============================================================================
 
+// ---------- 路径与文件读取 ----------
+// 本库的约定：**所有路径都是 UTF-8 字符串**。
+// 鸿蒙/安卓/Linux/macOS 原生就是 UTF-8；Windows 上命令行拿到的是 GBK，
+// 调用方需要先转成 UTF-8（CppDataAnalyzerCli.cpp 里有转换示例），
+// 库内部再用宽字符 API 打开文件，这样中文路径才不会失效。
+namespace detail {
+
+#if defined(_WIN32)
+
+inline std::wstring utf8_to_wide(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    const int wlen = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, NULL, 0);
+    if (wlen <= 0) return std::wstring();
+    std::wstring w(static_cast<size_t>(wlen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], wlen);
+    w.resize(static_cast<size_t>(wlen - 1));
+    return w;
+}
+
+#endif
+
+// 以二进制读整个文件（不走 ifstream：MinGW 的 libstdc++ 没有 wchar_t* 重载）
+inline bool read_file_bytes(const std::string& path, std::string& out) {
+#if defined(_WIN32)
+    const std::wstring w = utf8_to_wide(path);
+    std::FILE* fp = _wfopen(w.c_str(), L"rb");
+#else
+    std::FILE* fp = std::fopen(path.c_str(), "rb");
+#endif
+    if (fp == NULL) return false;
+    out.clear();
+    char buf[65536];
+    size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), fp)) > 0) out.append(buf, n);
+    std::fclose(fp);
+    return true;
+}
+
+}  // namespace detail
+
 // ---------- 解析节拍表 CSV ----------
 // 格式：# song=... / # model=... / 每行一个时间戳
-// 解析不了的行会被跳过（与原版一致）。
+// 解析不了的行会被跳过（与原版一致）。路径按 UTF-8 解释。
 inline bool parse_beats_csv(const std::string& filename,
                             BeatTable& out,
                             std::string* error = 0) {
@@ -539,11 +703,12 @@ inline bool parse_beats_csv(const std::string& filename,
     out.model.clear();
     out.beats.clear();
 
-    std::ifstream file(filename.c_str());
-    if (!file.is_open()) {
+    std::string content;
+    if (!detail::read_file_bytes(filename, content)) {
         if (error) *error = "无法打开文件: " + filename;
         return false;
     }
+    std::istringstream file(content);
     std::string line;
     while (std::getline(file, line)) {
         if (!line.empty() && line[line.size() - 1] == '\r') line.erase(line.size() - 1);
@@ -598,7 +763,9 @@ inline Result analyze_beats(const std::vector<double>& beats,
     }
     r.paragraphs = detect_dynamic_bpm(beats, opt, 0);
     if (r.paragraphs.empty()) {
-        r.error = "未检测到有效段落（整体置信度太低或时长太短）";
+        r.error = opt.multi_segment
+                      ? "未检测到有效段落（整体置信度太低或时长太短）"
+                      : "未能估计出 BPM（节拍太少，或抗混叠/线性拟合失败）";
         return r;
     }
     r.ok = true;
