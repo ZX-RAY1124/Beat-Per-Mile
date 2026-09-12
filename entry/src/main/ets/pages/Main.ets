@@ -28,6 +28,7 @@ struct Main {
   @State windowHeight: number = 0;
   @State gesture_offset: number = 0;
   @State gesture_start: number = 0;
+  @State isMenuShow: boolean = false; //页面导航子菜单是否展开
 
 
   @State Button_1 : Center_Button = new Center_Button(1)
@@ -42,6 +43,32 @@ struct Main {
       offsetX: 0,
       offsetY: 4})
     .margin(5);
+  }
+
+  /**
+   * 主页"页面导航"按钮的子菜单
+   *
+   * 只收录我们自己写的页面（原生自带的测试按钮不放在这里）。
+   * 约定：以后每做好一个页面，就在这里加一个 MenuItem，例如：
+   *   MenuItem({ content: '歌曲列表' })
+   *     .onClick(() => {
+   *       this.isMenuShow = false
+   *       this.navPathStack.pushPathByName('SongList_Page', null, true)
+   *     })
+   * 新页面记得同步在 resources/base/profile/router_map.json 里注册。
+   *
+   * 菜单显隐由 isMenuShow 控制（bindMenu 的受控写法），
+   * 所以每个 MenuItem 里都要先把 isMenuShow 置 false 再跳转。
+   */
+  @Builder
+  PageMenu() {
+    Column() {
+      MenuItem({ content: '曲线列表' })
+        .onClick(() => {
+          this.isMenuShow = false
+          this.navPathStack.pushPathByName('CurveList_Page', null, true)
+        })
+    }
   }
 
   aboutToAppear(): void {
@@ -241,6 +268,27 @@ struct Main {
             .height('100%')
             .justifyContent(FlexAlign.Center)
             .alignItems(HorizontalAlign.Center)
+
+            // 页面导航入口：放在大圆下方、底部悬浮 tab 栏上方的空白区，周围没有别的元素。
+            // 同时必须是 RelativeContainer 的最后一个子节点（后绘制的在上层），否则会被
+            // 上面那个 100%×100% 的 Column 挡住。
+            Button('页面导航') //只负责进入我们自己写的页面，入口都放在 PageMenu() 子菜单里
+              .height(40)
+              .width(120)
+              .onClick(() => {
+                console.info('页面导航按钮被点击, 当前 isMenuShow=' + this.isMenuShow)
+                this.isMenuShow = !this.isMenuShow
+              })
+              .bindMenu(this.isMenuShow, this.PageMenu, {
+                onDisappear: () => { //点空白处收起菜单时，把状态同步回来
+                  this.isMenuShow = false
+                }
+              })
+              .alignRules({
+                'bottom': { 'anchor': '__container__', 'align': VerticalAlign.Bottom },
+                'middle': { 'anchor': '__container__', 'align': HorizontalAlign.Center },
+              })
+              .offset({ y: -150 })
           }
         }.tabBar("11111")
 
