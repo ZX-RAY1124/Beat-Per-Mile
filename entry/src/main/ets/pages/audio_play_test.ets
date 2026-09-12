@@ -37,7 +37,7 @@ struct audio_test {
             audioRendererInit();       //初始化播放器
           });
           Button("从Native播放").width(200).height(40).onClick(()=> {
-            copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "credits.wav").then((audioPath:string) => {
+            copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "LostMemory.m4a").then((audioPath:string) => {
               if(!this.player) {
                 this.player = music_play(audioPath, (block: number) => {
                   console.log(block.toString());
@@ -50,12 +50,12 @@ struct audio_test {
 
 
           });
-          Button("加速x0.5").width(120).height(30).onClick(() => {
-            this.speed += 0.5
+          Button("加速x0.2").width(120).height(30).onClick(() => {
+            this.speed += 0.2
             changeSpeed(this.speed);
           });
-          Button("减速x0.5").width(120).height(30).onClick(() => {
-            this.speed -= 0.5
+          Button("减速x0.2").width(120).height(30).onClick(() => {
+            this.speed -= 0.2
             changeSpeed(this.speed);
           });
         }.justifyContent(FlexAlign.Center).offset({y : 200});

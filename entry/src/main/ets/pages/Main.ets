@@ -66,14 +66,21 @@ struct Main {
         TabContent() {
           RelativeContainer() {
 
-            Text('今日统计') //开头
 
 
-            Row() { //标题三栏
+            Row({space:10}) { //标题三栏
               this.Column_UP();
               this.Column_UP();
               this.Column_UP();
-            }
+            }.alignRules(
+              {
+                'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
+                'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start},
+              }
+            ).offset({y:20})
+
+
+
 
 
             Column() {
@@ -254,6 +261,7 @@ struct Main {
     }.width('100%')
     .height('100%')
     .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    .titleBar({content:{title:{mainTitle:"今日统计",mainTitleSize:20}}})
     .mode(NavDestinationMode.STANDARD)
     .onReady((context: NavDestinationContext) => {
         this.navPathStack = context.pathStack;

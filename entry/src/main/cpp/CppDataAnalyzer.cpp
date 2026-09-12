@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <random>
 #include <sstream>
 #include <vector>
 #include <string>
@@ -25,11 +26,13 @@ struct Paragraph {
 std::vector<int> kmeans_1d(const std::vector<double>& data, int k, int max_iter = 100) {
     if (data.empty()) return {};
     int n = data.size();
+    std::random_device rd;
+    std::mt19937 g(rd());
     std::vector<double> centers(k);
     std::vector<int> labels(n);
     std::vector<int> indices(n);
     for (int i = 0; i < n; ++i) indices[i] = i;
-    std::random_shuffle(indices.begin(), indices.end());
+    std::shuffle(indices.begin(), indices.end(),g);
     for (int i = 0; i < k; ++i) centers[i] = data[indices[i]];
 
     bool changed = true;

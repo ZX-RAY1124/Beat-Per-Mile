@@ -13,7 +13,7 @@
 // ─── 播放用环形缓冲区：实现真正的流式生产者-消费者 ───
 class PlaybackRingBuffer {
 public:
-    PlaybackRingBuffer(size_t capacity) : buffer_(capacity), capacity_(capacity) {}
+    PlaybackRingBuffer(size_t capacity) : buffer_(capacity + 1), capacity_(capacity + 1) {}    //留一格区分满和空
 
     /** 生产者写入数据，返回实际写入的 float 个数 */
     size_t write(const float* data, size_t count) {
@@ -74,6 +74,7 @@ struct TsfnContext {
     
     std::atomic<bool> paused{false};
     std::atomic<bool> cancelled{false};
+    std::vector<float> g_interleavedBuf;         //缓冲
     std::string fileName;
     std::thread worker;
     
@@ -104,10 +105,10 @@ static OH_AudioData_Callback_Result OnWriteData_New(
     void* userData,
     void* buffer,
     int32_t bufferLen){
-        OH_LOG_INFO(LOG_APP, "register data...");
-        std::lock_guard<std::mutex> lock(g_dataMutex);
         size_t floatCount = static_cast<size_t>(bufferLen) / sizeof(float);
         size_t floatsRead = g_ringBuffer.read(static_cast<float*>(buffer), floatCount);
+        
+
 
         // 如果环形缓冲区数据不足，用静音填充剩余部分
         if (floatsRead < floatCount) {
@@ -243,6 +244,7 @@ static napi_value speedChange(napi_env env,napi_callback_info info){
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     napi_get_value_double(env, args[0], &speed);
     dataClip->accelerate = speed;
+    OH_LOG_INFO(LOG_APP, "set speed to %{public}fx", speed);
     return nullptr;
 }
 
@@ -263,7 +265,6 @@ static void clear(TsfnContext* ctx){
         std::lock_guard<std::mutex> lock(g_mapMutex);
         g_downloadMap.erase(ctx->playerId);
     }
-    delete ctx;
 }
 
 
@@ -290,26 +291,30 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         std::lock_guard<std::mutex> lock(g_dataMutex);
         dataClip->block_num = 0;
     }
-    player.setAudioCallback([](const float* data, int frame, int ch) {
-        g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
+    player.setSilenceOnPause(true);      // ★ 暂停期间不产生任何回调数据
 
+    player.setAudioCallback([&ctx](const float* data, int frame, int ch) {
+        g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
+        if(ctx->paused.load(std::memory_order_relaxed)){return;};            //暂停时丢弃本块
         int sampleCount = frame * ch;      //本块采样总数
+        
+        if(ctx->g_interleavedBuf.size() < sampleCount){
+            ctx->g_interleavedBuf.resize(sampleCount);
+        }
 
         // ── planar → interleaved 转换 ──
         // LiveStretchPlayer 输出为 planar: LLL...RRR...
         // AudioRenderer 需要 interleaved: LRLRLR...
-        auto* interleaved = new float[static_cast<size_t>(sampleCount)];
         for (int c = 0; c < ch; c++) {
             for (int i = 0; i < frame; i++) {
-                interleaved[i * ch + c] = data[c * frame + i];
+                ctx->g_interleavedBuf[i * ch + c] = data[c * frame + i];
             }
         }
         {
-            std::lock_guard<std::mutex> lock(g_dataMutex);
-            g_ringBuffer.write(interleaved, static_cast<size_t>(sampleCount));
+            g_ringBuffer.write(ctx->g_interleavedBuf.data(), static_cast<size_t>(ctx->g_interleavedBuf.size()));
             dataClip->block_num += 1;
         }
-        delete[] interleaved;
+
     });
     
     player.loadAudio(audio_processor.make_planner_data(), audio_processor.total_frame);
@@ -336,14 +341,21 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
                 break;
             }
             player.pause();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));       //停止忙等，释放
         }
         player.resume();
-
         
+
+        long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
+        
+        if(nowMs() - last >= 200){
+            last = nowMs();
+            napi_call_threadsafe_function(ctx->tsfn, dataClip, napi_tsfn_nonblocking);          //回调函数
+        }
+
         if(!finished && !quit){
             //判断结束
             //finished = true;
-            long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
             if (last > 0 && !ctx->paused.load() &&
                 (nowMs() - last) > 500) {    // 自然结束检测：未暂停且超过 500ms 没有回调 => 播放结束
                 finished = true;
@@ -351,16 +363,15 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
             
         }
         
-        napi_call_threadsafe_function(ctx->tsfn, dataClip, napi_tsfn_nonblocking);          //回调函数
         
     }
-    player.stop();
     if(finished){
         OH_LOG_INFO(LOG_APP, "DONE");
+        OH_AudioRenderer_Stop(audioRenderer);
         clear(ctx);
+        return;
     }
     
-    return;
     
 }
 
@@ -478,7 +489,7 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
     memset(buf, 0, strLen + 1);
     sourceStatus = napi_get_value_string_utf8(env, args[0], buf, strLen + 1, &strLen);
     
-    OH_LOG_INFO(LOG_APP, "Step2 status: %d, length: %zu, buf[0]=%d, buf=%s",
+    OH_LOG_INFO(LOG_APP, "Step2 status: %{public}d, length: %{public}zu, buf[0]=%{public}d, buf=%{public}s",
     sourceStatus, strLen, buf[0], buf);
     
 

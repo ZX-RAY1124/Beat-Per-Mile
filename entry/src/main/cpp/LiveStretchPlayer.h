@@ -220,7 +220,6 @@ public:
 
     /** 停止播放并等待后台线程退出（阻塞调用线程） */
     void stop() {
-        if (!running_) return;
         running_ = false;
         paused_ = false;
         if (workThread_.joinable()) {
