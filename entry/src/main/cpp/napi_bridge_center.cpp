@@ -216,7 +216,8 @@ static napi_value Squire(napi_env env, napi_callback_info info){
 static napi_value analyzeMusic(napi_env env, napi_callback_info info){
     size_t argc = 1;
     napi_value fileDir;
-    
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     
     return nullptr;
 }
