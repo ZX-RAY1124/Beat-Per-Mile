@@ -5,7 +5,9 @@ import { audio } from '@kit.AudioKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
-import { audioRendererInit, changeSpeed, music_cancel, music_pause, music_play, music_resume } from 'libentry.so';
+import { audioRendererInit, changeSpeed,
+  musicAnalyse,
+  music_cancel, music_pause, music_play, music_resume } from 'libentry.so';
 import { fileIo } from '@kit.CoreFileKit';
 
 
@@ -37,7 +39,8 @@ struct audio_test {
             audioRendererInit();       //初始化播放器
           });
           Button("从Native播放").width(200).height(40).onClick(()=> {
-            copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "Vocal.wav").then((audioPath:string) => {
+            copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "LostMemory.m4a").then((audioPath:string) => {
+              musicAnalyse(audioPath);
               if(!this.player) {
                 this.player = music_play(audioPath, (block: number) => {
                   console.log(block.toString());

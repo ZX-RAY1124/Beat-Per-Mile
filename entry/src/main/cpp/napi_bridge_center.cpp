@@ -1,3 +1,4 @@
+#include "EssentiaBeats.hpp"
 #include "audio_process.h"
 #include "napi/native_api.h"
 #include "hilog/log.h"
@@ -218,6 +219,15 @@ static napi_value analyzeMusic(napi_env env, napi_callback_info info){
     napi_value fileDir;
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    size_t strLen;
+    napi_status sourceStatus =  napi_get_value_string_utf8(env, args[0], nullptr, 0, &strLen);
+    char* buf = new char[strLen + 1]();
+    memset(buf, 0, strLen + 1);
+    sourceStatus = napi_get_value_string_utf8(env, args[0], buf, strLen + 1, &strLen);
+    if(sourceStatus == napi_ok){
+        eb::detect_file_to_csv(buf);
+    }
+
     
     return nullptr;
 }
@@ -568,7 +578,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"music_pause", nullptr, musicPause, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"audioRendererInit", nullptr, AudioRendererInit, nullptr, nullptr, nullptr, napi_writable, nullptr},
         {"audioRendererRelease", nullptr, AudioRendererRelease, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"changeSpeed", nullptr, speedChange, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"changeSpeed", nullptr, speedChange, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"musicAnalyse", nullptr, analyzeMusic, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

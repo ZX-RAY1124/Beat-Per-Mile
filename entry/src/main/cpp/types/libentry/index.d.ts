@@ -8,3 +8,4 @@ export const music_cancel:(id: number) => void;
 export const audioRendererInit:() => void;
 export const audioRendererRelease:() => void;
 export const changeSpeed:(speed: number) => void;
+export const musicAnalyse:(path: string) => void;
