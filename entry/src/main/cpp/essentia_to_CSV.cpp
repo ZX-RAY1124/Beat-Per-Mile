@@ -2,19 +2,22 @@
 //  essentia_to_CSV.cpp
 //  用 Essentia 检测节拍并导出节拍表 CSV —— essentia_to_CSV.py 的 C++ 等价实现
 //
-//  ── 关于音频解码（重要）────────────────────────────────────────────────────
-//  Python 版用 es.MonoLoader 读音频，而 MonoLoader 依赖 Essentia 的 AudioLoader，
-//  AudioLoader 又是用 FFmpeg(libav) 实现的。
+//  ── 音频从哪来（两种模式，按平台自动选择）──────────────────────────────────
+//  Python 版用 es.MonoLoader 读音频，MonoLoader 依赖 Essentia 的 AudioLoader，
+//  后者是用 FFmpeg(libav) 实现的。所以能不能用 MonoLoader，取决于链的那份 Essentia
+//  有没有带 FFmpeg 支持：
 //
-//  本地这份 Essentia 是**不带 libav** 编译的：Essentia 2.1_beta5 用的是 FFmpeg 4 时代
-//  的 API（av_register_all / avcodec_decode_audio4 / avresample_* / AVCodecContext->channels），
-//  这些在 FFmpeg 5.0 和 7.0 已经被删除，而本机只有 FFmpeg 9.0，链不上。
-//  所以这里改成：**调用 ffmpeg 命令行解码**成 44100Hz 单声道 f32le 裸流，
-//  再直接喂给 RhythmExtractor2013（它只需要 vector<Real> 信号）。
-//  解码/降混/重采样仍然全部由 FFmpeg 完成，与 MonoLoader 内部做的事情一致。
+//   * ESSENTIA_USE_MONOLOADER = 1  —— Essentia 自带 FFmpeg 时用（**鸿蒙工程用这个**，
+//       工程里那份 libessentia.so 是带 FFmpeg 4.4.4 编的）。与 Python 版行为完全一致。
 //
-//  如果你的 Essentia 是**带 FFmpeg 支持**编译的（例如鸿蒙工程里那份 libessentia.so），
-//  把下面的 ESSENTIA_USE_MONOLOADER 改为 1，就会走与 Python 版完全相同的 MonoLoader 路径。
+//   * ESSENTIA_USE_MONOLOADER = 0  —— Essentia 不带 FFmpeg 时用（桌面这份就是：
+//       Essentia 2.1_beta5 用的是 FFmpeg 4 时代的 API —— av_register_all /
+//       avcodec_decode_audio4 / avresample_* / AVCodecContext->channels，这些在
+//       FFmpeg 5.0、7.0 已被删除，而本机只有 FFmpeg 9，链不上）。
+//       此时改成调用 **ffmpeg 命令行**解码成 44100Hz 单声道 f32le 裸流，
+//       再直接喂给 RhythmExtractor2013。解码/降混/重采样仍然全由 FFmpeg 完成。
+//
+//  默认：OHOS / Android 用 1，其它平台用 0；也可用 -DESSENTIA_USE_MONOLOADER=x 覆盖。
 //
 //  ── CSV 格式（与 madmom_to_CSV.py / essentia_to_CSV.py 一致）──────────────
 //    # song=<不含扩展名的音频文件名>
@@ -22,9 +25,9 @@
 //    <时间戳，全精度，每行一个>
 //  编码 UTF-8（无 BOM），行尾 CRLF。
 //
-//  编译（Windows / MSYS2 ucrt64，链接本地编译的 Essentia）：
-//    g++ -std=gnu++11 -O2 essentia_to_CSV.cpp -o essentia_to_CSV.exe \
-//        -I$ESSENTIA/include -L$ESSENTIA/lib -lessentia -lfftw3f -lsamplerate -lstdc++
+//  编译（Windows / MSYS2 ucrt64，链接本地编译的 Essentia 静态库）：
+//    g++ -std=gnu++11 -O2 essentia_to_CSV.cpp -o essentia_to_CSV.exe -I$ESS/include
+//        $ESS/lib/libessentia.a -lfftw3f -lsamplerate -ltag -lyaml -lchromaprint -lz
 //  编译（Linux / macOS，已装 Essentia）：
 //    g++ -std=gnu++11 -O2 essentia_to_CSV.cpp -o essentia_to_CSV $(pkg-config --cflags --libs essentia)
 //
@@ -46,7 +49,17 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
+// 平台判定集中在这里。这样做既清晰，也允许用 -DESSENTIA_PLATFORM_WINDOWS=0
+// 在 Windows 上编译验证 POSIX 分支（否则那条分支在本地永远测不到）。
+#ifndef ESSENTIA_PLATFORM_WINDOWS
+#  ifdef _WIN32
+#    define ESSENTIA_PLATFORM_WINDOWS 1
+#  else
+#    define ESSENTIA_PLATFORM_WINDOWS 0
+#  endif
+#endif
+
+#if ESSENTIA_PLATFORM_WINDOWS
 #  include <windows.h>
 #endif
 
@@ -54,9 +67,14 @@ using essentia::Real;
 using essentia::standard::Algorithm;
 using essentia::standard::AlgorithmFactory;
 
-// 0 = 用 ffmpeg 命令行解码（本机这份不带 libav 的 Essentia 用这个）
-// 1 = 用 Essentia 自己的 MonoLoader（需要 Essentia 编译时带 FFmpeg 支持）
-#define ESSENTIA_USE_MONOLOADER 0
+// 见文件顶部说明：1 = 用 Essentia 自己的 MonoLoader；0 = 用 ffmpeg 命令行解码
+#ifndef ESSENTIA_USE_MONOLOADER
+#  if defined(__OHOS__) || defined(__ANDROID__) || defined(__APPLE__)
+#    define ESSENTIA_USE_MONOLOADER 1
+#  else
+#    define ESSENTIA_USE_MONOLOADER 0
+#  endif
+#endif
 
 namespace {
 
@@ -87,7 +105,7 @@ struct Options {
 // ---- Windows 上的编码处理 ---------------------------------------------------
 // Python 3 的 argv 是 Unicode；C 的 main() 拿到的是当前代码页(中文系统为 GBK)。
 // 这里统一转成 UTF-8，保证含中文的路径/文件名不出乱码。
-#ifdef _WIN32
+#if ESSENTIA_PLATFORM_WINDOWS
 
 std::string acpToUtf8(const char* s) {
   if (s == NULL) return std::string();
@@ -140,7 +158,7 @@ std::string stripExtension(const std::string& path) {
 
 // 等价于 os.path.isfile：存在且不是目录
 bool fileExists(const std::string& path) {
-#ifdef _WIN32
+#if ESSENTIA_PLATFORM_WINDOWS
   const std::wstring w = utf8ToWide(path);
   const DWORD attrs = GetFileAttributesW(w.c_str());
   return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
@@ -151,7 +169,7 @@ bool fileExists(const std::string& path) {
 }
 
 bool writeFileUtf8(const std::string& path, const std::string& content) {
-#ifdef _WIN32
+#if ESSENTIA_PLATFORM_WINDOWS
   const std::wstring w = utf8ToWide(path);
   std::FILE* fp = _wfopen(w.c_str(), L"wb");
 #else
@@ -163,12 +181,16 @@ bool writeFileUtf8(const std::string& path, const std::string& content) {
   return written == content.size();
 }
 
-// ---- 用 ffmpeg 命令行解码成 44100Hz 单声道 float 裸流 -----------------------
-// 等价于 MonoLoader(sampleRate=44100) 的产物：PCM float，取值范围 [-1, 1]。
-#ifdef _WIN32
+// ============================================================================
+//  只有在"不用 MonoLoader"时才需要下面这段：用 ffmpeg 命令行解码音频
+//  （鸿蒙/安卓/iOS 上走 MonoLoader，整段都不参与编译）
+// ============================================================================
+#if !ESSENTIA_USE_MONOLOADER
 
 // 把字节流按 float 追加到 samples（处理读取边界上的半个 float）
-void appendFloats(std::vector<Real>& samples, std::vector<char>& carry, const char* data, size_t bytes) {
+// 注意：这个函数两个平台共用，必须放在平台分支**外面**。
+void appendFloats(std::vector<Real>& samples, std::vector<char>& carry,
+                  const char* data, size_t bytes) {
   size_t start = 0;
   if (!carry.empty()) {
     while (carry.size() < 4 && start < bytes) carry.push_back(data[start++]);
@@ -187,16 +209,21 @@ void appendFloats(std::vector<Real>& samples, std::vector<char>& carry, const ch
   for (size_t i = start + whole; i < bytes; ++i) carry.push_back(data[i]);
 }
 
-bool loadAudioViaFfmpeg(const std::string& ffmpegExe, const std::string& audioPath,
-                        std::vector<Real>& samples) {
-  // 构造命令行：解码 -> f32le / 单声道 / 44100Hz -> stdout("-")
+// 拼出 ffmpeg 解码命令：解码 -> f32le / 单声道 / 44100Hz -> stdout("-")
+std::string buildFfmpegCommand(const std::string& ffmpegExe, const std::string& audioPath) {
   std::ostringstream cmd;
   cmd << '"' << ffmpegExe << '"'
       << " -hide_banner -loglevel error -nostdin -i " << '"' << audioPath << '"'
       << " -vn -f f32le -acodec pcm_f32le -ac 1 -ar " << static_cast<int>(kSampleRate)
       << " -";
+  return cmd.str();
+}
 
-  const std::wstring wcmd = utf8ToWide(cmd.str());
+#  if ESSENTIA_PLATFORM_WINDOWS
+
+bool loadAudioViaFfmpeg(const std::string& ffmpegExe, const std::string& audioPath,
+                        std::vector<Real>& samples) {
+  const std::wstring wcmd = utf8ToWide(buildFfmpegCommand(ffmpegExe, audioPath));
 
   SECURITY_ATTRIBUTES sa;
   sa.nLength = sizeof(sa);
@@ -259,16 +286,11 @@ bool loadAudioViaFfmpeg(const std::string& ffmpegExe, const std::string& audioPa
   return true;
 }
 
-#else  // ---------- POSIX：用 popen ----------
+#  else  // ---------- POSIX（Linux / macOS）：用 popen ----------
 
 bool loadAudioViaFfmpeg(const std::string& ffmpegExe, const std::string& audioPath,
                         std::vector<Real>& samples) {
-  std::ostringstream cmd;
-  cmd << '"' << ffmpegExe << '"'
-      << " -hide_banner -loglevel error -nostdin -i " << '"' << audioPath << '"'
-      << " -vn -f f32le -acodec pcm_f32le -ac 1 -ar " << static_cast<int>(kSampleRate)
-      << " -";
-  std::FILE* p = popen(cmd.str().c_str(), "r");
+  std::FILE* p = popen(buildFfmpegCommand(ffmpegExe, audioPath).c_str(), "r");
   if (p == NULL) {
     std::cerr << "错误：无法启动 ffmpeg" << std::endl;
     return false;
@@ -288,7 +310,9 @@ bool loadAudioViaFfmpeg(const std::string& ffmpegExe, const std::string& audioPa
   return true;
 }
 
-#endif
+#  endif
+
+#endif  // !ESSENTIA_USE_MONOLOADER
 
 // ---- 参数解析 --------------------------------------------------------------
 void printUsage(const char* prog) {
@@ -467,7 +491,7 @@ int run(const std::vector<std::string>& args) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-#ifdef _WIN32
+#if ESSENTIA_PLATFORM_WINDOWS
   enableUtf8Console();
 #endif
   std::vector<std::string> args;
