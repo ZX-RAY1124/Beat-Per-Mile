@@ -213,6 +213,16 @@ static napi_value Squire(napi_env env, napi_callback_info info){
     return final;
 }
 
+static napi_value analyzeMusic(napi_env env, napi_callback_info info){
+    size_t argc = 1;
+    napi_value fileDir;
+    
+    
+    return nullptr;
+}
+
+
+
 static long long nowMs() {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
