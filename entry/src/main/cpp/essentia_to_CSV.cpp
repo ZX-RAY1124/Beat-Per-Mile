@@ -187,6 +187,7 @@ bool writeFileUtf8(const std::string& path, const std::string& content) {
 // ============================================================================
 #if !ESSENTIA_USE_MONOLOADER
 
+
 // 把字节流按 float 追加到 samples（处理读取边界上的半个 float）
 // 注意：这个函数两个平台共用，必须放在平台分支**外面**。
 void appendFloats(std::vector<Real>& samples, std::vector<char>& carry,

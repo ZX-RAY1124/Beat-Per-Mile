@@ -37,7 +37,7 @@ struct audio_test {
             audioRendererInit();       //初始化播放器
           });
           Button("从Native播放").width(200).height(40).onClick(()=> {
-            copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "LostMemory.m4a").then((audioPath:string) => {
+            copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "Vocal.wav").then((audioPath:string) => {
               if(!this.player) {
                 this.player = music_play(audioPath, (block: number) => {
                   console.log(block.toString());

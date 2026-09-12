@@ -291,10 +291,11 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         std::lock_guard<std::mutex> lock(g_dataMutex);
         dataClip->block_num = 0;
     }
-    player.setSilenceOnPause(true);      // ★ 暂停期间不产生任何回调数据
+    player.setSilenceOnPause(false);      // ★ 暂停期间不产生任何回调数据
 
     player.setAudioCallback([&ctx](const float* data, int frame, int ch) {
         g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
+        
         if(ctx->paused.load(std::memory_order_relaxed)){return;};            //暂停时丢弃本块
         int sampleCount = frame * ch;      //本块采样总数
         
@@ -321,7 +322,6 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     
     player.play();                                     //加载音频流
     OH_AudioRenderer_Start(audioRenderer);            //开始播放
-    
     //播放器循环
     while(!finished && !quit){
         player.setSpeed(dataClip->accelerate);
@@ -346,12 +346,10 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         player.resume();
         
 
-        long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
         
-        if(nowMs() - last >= 200){
-            last = nowMs();
-            napi_call_threadsafe_function(ctx->tsfn, dataClip, napi_tsfn_nonblocking);          //回调函数
-        }
+        
+        
+        long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
 
         if(!finished && !quit){
             //判断结束
@@ -359,9 +357,18 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
             if (last > 0 && !ctx->paused.load() &&
                 (nowMs() - last) > 500) {    // 自然结束检测：未暂停且超过 500ms 没有回调 => 播放结束
                 finished = true;
+                break;
             }
             
+            
         }
+        /*
+        if(nowMs() - last >= 200){
+            last = nowMs();
+            napi_call_threadsafe_function(ctx->tsfn, dataClip, napi_tsfn_nonblocking);          //回调函数
+        }      
+        */
+
         
         
     }
