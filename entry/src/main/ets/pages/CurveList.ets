@@ -1,5 +1,4 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
-
 /**
  * 曲线列表页
  *
@@ -151,6 +150,10 @@ struct CurvePreview {
  */
 @Component
 struct CurveCard {
+  dialogComponentId?: number;
+  @State inputValue: string = '';       // 通过 @Link 双向同步到父组件
+  @State realBPM: string = '';
+
   // 静态数据
   title: string = '';
   points: number[] = [];
@@ -164,6 +167,68 @@ struct CurveCard {
   };
   onSettings: () => void = () => {
   };
+
+  @Builder
+  BPM_setting_builder() {
+    Column() {
+      Text("设置默认BPM").fontSize($r('sys.float.Title_M'))
+        .fontColor($r('sys.color.font_primary'))
+        .fontWeight(FontWeight.Bold)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .padding({top:20, bottom: 30})
+      Column() {
+        TextInput({placeholder:"请输入BPM", text: this.inputValue}).width("80%").height(40).type(InputType.Number).defaultFocus(true).onChange((value: string) => {
+          this.inputValue = value.replace(/[^\d]/g, '')
+        });
+      }.padding({bottom: 20})
+      Row({space: 30}) {
+        Button("确定").width(100).height(40).onClick(() => {
+          /** 这里记得加上设置BPM的函数*/
+          this.close_BPM_setting();
+          this.realBPM = this.inputValue;
+        }).backgroundColor(CARD_ACCENT)
+        Button("取消").width(100).height(40).onClick(() => {
+          this.close_BPM_setting();
+        }).backgroundColor(CARD_ACCENT)
+      }.padding({bottom: 30})
+    }
+  }
+
+  show_BPM_setting(){
+    try {
+      const promptAction = this.getUIContext().getPromptAction();
+      promptAction.openCustomDialog({
+        builder: () => {
+          this.BPM_setting_builder();
+        },
+        autoCancel : false,
+
+      }).then((dialogId: number) => {
+        this.dialogComponentId = dialogId;
+      })
+        .catch((error: BusinessError) => {
+
+      });
+    } catch (error){
+
+    }
+  }
+
+  close_BPM_setting() {
+    if(this.dialogComponentId) {
+      try{
+        this.getUIContext().getPromptAction().closeCustomDialog(this.dialogComponentId);
+        this.dialogComponentId = undefined;
+
+      } catch (error){
+         //先不处理
+      }
+    }
+  }
+
+
+
 
   build() {
     Column({ space: 10 }) {
@@ -195,24 +260,27 @@ struct CurveCard {
         .width('100%')
         .alignItems(VerticalAlign.Center)
       } else {
-        Row({space: 12}) {
-          Text(this.title)
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#1B1B2F')
-            .width(277.14)
-            .textAlign(TextAlign.Start)
+        Text(this.title)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#1B1B2F')
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          Row({space:12}) {
+            Text("默认BPM:" + this.realBPM)
+              .width(277.14)
+              .fontSize(12)
+              .textAlign(TextAlign.Start)
 
-          SymbolGlyph($r('sys.symbol.gearshape'))
-            .fontSize(24)
-            .fontColor(['#8A8F99'])
-            .onClick(() => {
-              //上推屏
+            SymbolGlyph($r('sys.symbol.gearshape'))
+              .fontSize(24)
+              .fontColor(['#8A8F99'])
+              .onClick(() => {
+                //弹窗
+                this.show_BPM_setting();
+              })
+          }
 
-
-
-            })
-        }
       }
     }
     .width('100%')
