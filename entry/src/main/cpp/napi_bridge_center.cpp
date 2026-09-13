@@ -343,6 +343,7 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     
     player.play();                                     //加载音频流
     OH_AudioRenderer_Start(audioRenderer);            //开始播放
+    g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
     //播放器循环
     while(!finished && !quit){
         player.setSpeed(dataClip->accelerate);

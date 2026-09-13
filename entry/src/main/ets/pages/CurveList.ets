@@ -167,17 +167,16 @@ struct CurveCard {
 
   build() {
     Column({ space: 10 }) {
-      Text(this.title)
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#1B1B2F')
-        .width('100%')
-        .textAlign(TextAlign.Start)
-
       if (this.points.length >= 2) {
+        Text(this.title)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#1B1B2F')
+          .width('100%')
+          .textAlign(TextAlign.Start)
         Row({ space: 12 }) {
           Column() {
-            CurvePreview({
+            CurvePreview({         //缩略图
               points: this.points,
               lineColor: this.lineColor,
               fillColor: this.fillColor
@@ -186,7 +185,7 @@ struct CurveCard {
           .layoutWeight(1)
           .height(72)
 
-          SymbolGlyph($r('sys.symbol.gearshape'))
+          SymbolGlyph($r('sys.symbol.gearshape'))          //设置图标
             .fontSize(24)
             .fontColor(['#8A8F99'])
             .onClick(() => {
@@ -195,6 +194,25 @@ struct CurveCard {
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
+      } else {
+        Row({space: 12}) {
+          Text(this.title)
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#1B1B2F')
+            .width(277.14)
+            .textAlign(TextAlign.Start)
+
+          SymbolGlyph($r('sys.symbol.gearshape'))
+            .fontSize(24)
+            .fontColor(['#8A8F99'])
+            .onClick(() => {
+              //上推屏
+
+
+
+            })
+        }
       }
     }
     .width('100%')
