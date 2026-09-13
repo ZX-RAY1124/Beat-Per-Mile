@@ -1,4 +1,6 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
+import { preferences } from '@kit.ArkData';
+import { common } from '@kit.AbilityKit';
 
 /**
  * 曲线编辑页
@@ -28,6 +30,27 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
  * 第 1 个点固定在 0 分钟、最后一个点固定在总长度，它们的时间滑条是锁住的。
  * 拖动某个点的时间如果跨过了相邻点，会按时间重新排序，序号跟着这个点走。
  */
+
+/**
+ * 保存出去的数据
+ * 接上曲线列表后换成 ets_libs/CurveModel.ets 里的公共模型（见文档 5.2），
+ * 现在先在本页里定义一份，落盘和回传都用它
+ */
+interface CurvePointData {
+  time: number;
+  bpm: number;
+}
+
+interface CurveDraft {
+  title: string;
+  totalMinutes: number;
+  isLoop: boolean;
+  points: CurvePointData[];
+}
+
+/** 本地存储：和歌曲列表约定用同一个 store */
+const STORE_NAME: string = 'beat_per_mile';
+const KEY_CURVE_DRAFT: string = 'curve_editor_draft';
 
 /** 曲线上的一个编辑点 */
 class EditPoint {
@@ -112,6 +135,7 @@ const TEXT_SECONDARY: string = '#8A8F99';
 const FIELD_BG: string = '#F2F3F7';
 const TRACK_BG: string = '#E4E6EE';
 const TOGGLE_IDLE_TEXT: string = '#8C8880';
+const CHECKBOX_IDLE: string = '#B0B5BF';  // "循环"复选框未选中时的颜色
 
 /** 复制一份曲线点，避免直接改到模块常量 */
 function copyPoints(src: EditPoint[]): EditPoint[] {
@@ -306,6 +330,10 @@ struct CurveEdit {
   @State navPathStack: NavPathStack = new NavPathStack();
 
   // ---- 数据 ----
+  /** 曲线名称；现在只有名称框在用，接数据后由跳转参数带入（见文档 5.4） */
+  @State curveTitle: string = '';
+  /** 跑完一趟是否循环整条曲线 */
+  @State isLoop: boolean = true;
   /** 时间总长度（分钟） */
   @State totalMinutes: number = DEFAULT_TOTAL;
   @State totalText: string = DEFAULT_TOTAL.toString();
@@ -325,6 +353,8 @@ struct CurveEdit {
   @State viewStartMinute: number = 0;
   /** 一次拖动开始时的 viewStartMinute（不参与渲染） */
   private viewStartBase: number = 0;
+  /** 是否已经在退出流程里：防止弹窗里调 pop 又被 onBackPressed 拦一次（不参与渲染） */
+  private leaving: boolean = false;
 
   // ---- 拖点状态（不参与渲染）----
   /** 正在被拖的点的 id；-1 表示这次拖动是在拖时间轴 */
@@ -340,11 +370,35 @@ struct CurveEdit {
   aboutToAppear(): void {
     this.timeText = formatMinutes(this.currentTime());
     this.bpmText = this.currentBpm().toString();
+    // 把上次保存的曲线读回来（接上曲线列表的传参后，这里改成"有传参就用传参"）
+    this.loadDraft();
   }
 
   build() {
     HdsNavDestination() {
       Column() {
+        // ================= 曲线名称 =================
+        // 不加标签：占位文字"未命名曲线"一眼就知道是名字，标签省下的宽度全给输入框
+        Row({ space: 10 }) {
+          TextInput({ text: this.curveTitle, placeholder: '未命名曲线' })
+            .layoutWeight(1)
+            .height(38)
+            .fontSize(15)
+            .fontColor(TEXT_PRIMARY)
+            .placeholderColor(TEXT_SECONDARY)
+            .backgroundColor(FIELD_BG)
+            .borderRadius(10)
+            .padding({ left: 12, right: 12 })
+            .onChange((value: string) => {
+              this.curveTitle = value;
+            })
+
+          this.SaveButton()
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: 16, right: 16, top: 12 })
+
         // ================= 上半屏：图表 =================
         Stack() {
           Canvas(this.ctx)
@@ -387,13 +441,15 @@ struct CurveEdit {
         .borderRadius(18)
         .clip(true)
 
-        // 模式切换放在图表外面：放图里右下角会和横轴刻度文字叠在一起
-        Row() {
+        // 这一行放在图表外面：按钮放图里右下角会和横轴刻度文字叠在一起
+        Row({ space: 10 }) {
+          this.LoopCheckbox()
           Blank()
           this.ModeToggle()
         }
         .width('100%')
-        .padding({ right: 16, top: 10 })
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: 16, right: 16, top: 10 })
 
         // ================= 下半屏：操作台 =================
         Column({ space: 14 }) {
@@ -479,12 +535,62 @@ struct CurveEdit {
       .padding({ top: $r('sys.float.single_line_titlebar_height') })
     }
     .titleBar({ content: { title: { mainTitle: '曲线编辑', mainTitleSize: 20 } } })
+    // 返回时先问一句"保存还是丢弃"；return true 表示这次返回被拦下，等弹窗结果
+    .onBackPressed(() => {
+      if (this.leaving) {
+        return false; //已经在退出流程里了，放行
+      }
+      this.askSaveOnExit();
+      return true;
+    })
     .onReady((context: NavDestinationContext) => {
       this.navPathStack = context.pathStack;
     })
   }
 
-  /** 图表右下角的模式切换：实心底色＝全景，透明底色＝普通 */
+  /**
+   * 保存按钮
+   * 注意：不要写死宽度 —— Button 自带左右内边距，宽度给小了文案会被截成省略号
+   */
+  @Builder
+  SaveButton() {
+    Button('保存')
+      .type(ButtonType.Normal) //默认是胶囊形，改成圆角矩形才吃 borderRadius
+      .height(38)
+      .fontSize(15)
+      .fontColor(Color.White)
+      .backgroundColor(CHART_LINE)
+      .borderRadius(10)
+      .padding({ left: 16, right: 16 }) //宽度 = 文案 + 内边距，自动撑开
+      .onClick(() => {
+        this.askSave();
+      })
+  }
+
+  /**
+   * "循环"复选框：方框 → 实心对勾方框，带替换动效
+   * （和歌曲列表页行尾那个复选框同一套写法）
+   */
+  @Builder
+  LoopCheckbox() {
+    Row({ space: 8 }) {
+      SymbolGlyph(this.isLoop
+        ? $r('sys.symbol.checkmark_square_fill')
+        : $r('sys.symbol.square'))
+        .fontSize(20)
+        .fontColor([this.isLoop ? CHART_LINE : CHECKBOX_IDLE])
+        .symbolEffect(new ReplaceSymbolEffect(EffectScope.WHOLE), true)
+      Text('循环')
+        .fontSize(14)
+        .fontColor(this.isLoop ? TEXT_PRIMARY : TEXT_SECONDARY)
+    }
+    .height(30)
+    .onClick(() => {
+      this.isLoop = !this.isLoop;
+    })
+  }
+
+  /** 图表模式切换：实心底色＝全景，透明底色＝普通 */
   @Builder
   ModeToggle() {
     Row({ space: 6 }) {
@@ -1121,6 +1227,175 @@ struct CurveEdit {
   private isInsidePlot(localX: number, localY: number): boolean {
     return localX >= PAD_L && localX <= this.ctx.width - PAD_R &&
       localY >= PAD_T && localY <= this.ctx.height - PAD_B;
+  }
+
+  // ==================== 保存 / 退出 ====================
+
+  /** 名称兜底：没填就用占位文案 */
+  private curveTitleText(): string {
+    return this.curveTitle.length > 0 ? this.curveTitle : '未命名曲线';
+  }
+
+  /** 打包成要保存 / 回传的数据 */
+  private buildDraft(): CurveDraft {
+    const pts: CurvePointData[] = [];
+    for (let i = 0; i < this.points.length; i++) {
+      pts.push({ time: this.points[i].time, bpm: this.points[i].bpm });
+    }
+    const draft: CurveDraft = {
+      title: this.curveTitleText(),
+      totalMinutes: this.totalMinutes,
+      isLoop: this.isLoop,
+      points: pts
+    };
+    return draft;
+  }
+
+  /** 点"保存"按钮：先弹窗确认 */
+  private askSave(): void {
+    this.getUIContext().showAlertDialog({
+      title: '保存曲线？',
+      message: '「' + this.curveTitleText() + '」 · ' + this.totalMinutes + ' 分钟 · ' +
+        this.points.length + ' 个点',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '保存',
+        action: () => {
+          this.saveCurve();
+        }
+      }
+    });
+  }
+
+  /** 返回时弹：保存还是丢弃 */
+  private askSaveOnExit(): void {
+    this.getUIContext().showAlertDialog({
+      title: '还没保存',
+      message: '退出前要保存这条曲线吗？',
+      autoCancel: true, //点空白处关掉弹窗＝留在本页
+      primaryButton: {
+        value: '丢弃',
+        action: () => {
+          this.popEditor(false);
+        }
+      },
+      secondaryButton: {
+        value: '保存',
+        action: () => {
+          this.saveAndExit();
+        }
+      }
+    });
+  }
+
+  /** 保存（留在本页），存完给个提示 */
+  private async saveCurve(): Promise<void> {
+    const ok: boolean = await this.writeDraft(this.buildDraft());
+    this.getUIContext().getPromptAction().showToast({ message: ok ? '已保存' : '保存失败' });
+  }
+
+  /** 保存再退出 */
+  private async saveAndExit(): Promise<void> {
+    await this.writeDraft(this.buildDraft());
+    this.popEditor(true);
+  }
+
+  private async writeDraft(draft: CurveDraft): Promise<boolean> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (ctx === undefined || ctx === null) {
+      return false;
+    }
+    try {
+      const store: preferences.Preferences = await preferences.getPreferences(ctx, STORE_NAME);
+      await store.put(KEY_CURVE_DRAFT, JSON.stringify(draft));
+      await store.flush();
+      return true;
+    } catch (err) {
+      console.error('保存曲线失败：' + JSON.stringify(err));
+      return false;
+    }
+  }
+
+  /** 退出编辑页；keep=true 时把结果回传给调用方（配合 pushPathByName 的 onPop，见文档 5.5） */
+  private popEditor(keep: boolean): void {
+    this.leaving = true;
+    if (keep) {
+      this.navPathStack.pop(this.buildDraft(), true);
+    } else {
+      this.navPathStack.pop();
+    }
+  }
+
+  /** 进入页面时把上次保存的读回来；没有就用默认曲线 */
+  private async loadDraft(): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (ctx === undefined || ctx === null) {
+      return;
+    }
+    try {
+      const store: preferences.Preferences = await preferences.getPreferences(ctx, STORE_NAME);
+      const text: string = await store.get(KEY_CURVE_DRAFT, '') as string;
+      if (text.length === 0) {
+        return; //第一次进来，保持默认的两点直线
+      }
+      this.applyDraft(JSON.parse(text) as CurveDraft);
+    } catch (err) {
+      console.error('读取曲线失败：' + JSON.stringify(err));
+    }
+  }
+
+  /** 把读到的数据装进编辑器，顺带把三条不变量修一遍 */
+  private applyDraft(draft: CurveDraft): void {
+    let total: number = Math.round(draft.totalMinutes);
+    if (total < TOTAL_MIN) {
+      total = TOTAL_MIN;
+    }
+    if (total > TOTAL_MAX) {
+      total = TOTAL_MAX;
+    }
+    this.totalMinutes = total;
+    this.totalText = total.toString();
+    this.curveTitle = draft.title;
+    this.isLoop = draft.isLoop;
+
+    const list: EditPoint[] = [];
+    for (let i = 0; i < draft.points.length; i++) {
+      let t: number = draft.points[i].time;
+      if (t < 0) {
+        t = 0;
+      }
+      if (t > total) {
+        t = total;
+      }
+      let b: number = Math.round(draft.points[i].bpm);
+      if (b < BPM_MIN) {
+        b = BPM_MIN;
+      }
+      if (b > BPM_MAX) {
+        b = BPM_MAX;
+      }
+      list.push(new EditPoint(i, t, b));
+    }
+
+    if (list.length < 2) {
+      this.points = copyPoints(DEFAULT_POINTS); //数据不完整，退回默认曲线
+    } else {
+      list.sort((a: EditPoint, c: EditPoint): number => a.time - c.time);
+      list[0].time = 0; //不变量 1：头在 0
+      list[list.length - 1].time = total; //不变量 2：尾在总长度
+      this.points = list;
+    }
+
+    this.currentNo = 1;
+    this.currentText = '1';
+    this.timeText = formatMinutes(this.currentTime());
+    this.bpmText = this.currentBpm().toString();
+    this.drawChart();
   }
 }
 
