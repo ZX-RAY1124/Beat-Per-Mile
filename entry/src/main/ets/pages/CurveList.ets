@@ -290,9 +290,10 @@ struct CurveList {
     });
   }
 
-  /** 设置图标：具体页面还没做，先只打日志 */
+  /** 设置图标：进曲线编辑页 */
   private openSettings(title: string): void {
     console.info('打开曲线设置：' + title);
+    this.navPathStack.pushPathByName('CurveEdit_Page', null, true);
   }
 }
 

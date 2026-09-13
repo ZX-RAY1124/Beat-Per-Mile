@@ -16,6 +16,11 @@
       "buildFunction": "load"
     },
     {
+      "name": "CurveEdit_Page",
+      "pageSourceFile": "src/main/ets/pages/CurveEdit.ets",
+      "buildFunction": "load"
+    },
+    {
       "name": "Animation_test_Page",
       "pageSourceFile": "src/main/ets/pages/Animation_test.ets",
       "buildFunction": "load"
