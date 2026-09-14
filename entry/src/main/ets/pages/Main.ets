@@ -1,15 +1,17 @@
 import { Center_Button } from '../ets_libs/Button';
-import { curves, EllipseShape } from '@kit.ArkUI';
+import { curves, EllipseShape, LengthMetrics } from '@kit.ArkUI';
 import { window } from '@kit.ArkUI';
 import {
   hdsMaterial,
-  HdsNavDestination,
   HdsTabs,
   HdsNavigation,
   HdsNavigationTitleMode,
   HdsTabsController,
   ScrollEffectType,
 } from '@kit.UIDesignKit';
+
+import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
+
 import lottie, { AnimationItem } from '@ohos/lottie';
 import * as entry from 'libentry.so';
 import { SongList } from './SongList';
@@ -19,6 +21,19 @@ console.log('模块对象='+JSON.stringify(entry));
 console.log('模块对象是否为undefined = ' + (entry === undefined));
 console.log(entry.test_audio("test_audio"));
 
+class topColumnMaker{
+  icon:string = '';
+  per:string = '';
+  statistic:number = 0;
+  name:string = '';
+  constructor(icon:string, per:string ,statistic: number,name:string) {
+    this.icon = icon;
+    this.per = per;
+    this.statistic = statistic;
+    this.name = name;
+  }
+
+}
 
 
 @Preview
@@ -34,22 +49,43 @@ struct Main {
   @State gesture_start: number = 0;
   @State isMenuShow: boolean = false; //页面导航子菜单是否展开
   @State title_name: string = '';
-
+  CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
+  CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
 
   @State Button_1 : Center_Button = new Center_Button(1)
   @State Button_2 : Center_Button = new Center_Button(2)
-  @State pageName: string = "主屏幕";
+  @State pageName: string = "今日统计";
 
-  @State page_name_list : string[] = ["主屏幕","歌曲列表","曲线选择","设置"];
+  @State page_name_list : string[] = ["今日统计","歌曲列表","曲线选择","设置"];
+  @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
+  @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',0, '次数'),
+    new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
+    new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
+
 
   @Builder
-  Column_UP(){
-    Column(){}.height(100).width(100).borderRadius(20)
-    .shadow({
-      radius: 20,
-      color: '#1A000000',
-      offsetX: 0,
-      offsetY: 4})
+  Column_UP(index:number){
+    Column(){
+      SymbolGlyph($r(this.columnList[index].icon))
+        .fontSize(30)
+        .fontColor([this.colorList[index]])
+        .padding({ bottom: 10 });
+      Row(){
+        Text(this.columnList[index].statistic.toString()).fontWeight(FontWeight.Medium).fontSize(25)
+        Text(this.columnList[index].per).fontColor('#ff646161').fontSize(10).alignSelf(ItemAlign.Baseline)
+      }
+      Text(this.columnList[index].name).fontColor('#ff646161').fontSize(10)
+
+    }.height(120).width(100).borderRadius(20)
+    .justifyContent(FlexAlign.Center)
+    .borderColor(this.colorList[index])
+    .borderWidth({
+      left:this.CARD_BORDER_OTHER,
+      right:this.CARD_BORDER_OTHER,
+      top:this.CARD_BORDER_TOP,
+      bottom:this.CARD_BORDER_OTHER
+    })
+    .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
     .margin(5);
   }
 
@@ -134,15 +170,16 @@ struct Main {
           RelativeContainer() {
 
             Row({space:10}) { //标题三栏
-              this.Column_UP();
-              this.Column_UP();
-              this.Column_UP();
+              this.Column_UP(0);
+              this.Column_UP(1);
+              this.Column_UP(2);
             }.alignRules(
               {
                 'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
                 'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start},
               }
             )
+            .offset({x:13})
 
 
 
@@ -153,12 +190,12 @@ struct Main {
                 Button("测试Lottie动画").height(40).width(120).onClick(() => { //测试用，记得删掉
                   this.navPathStack.pushPathByName('Animation_test_Page', null, true)
                   console.info('ButtonType.Normal');
-                }).offset({ y: -200 })
+                }).offset({ y: -160 })
 
                 Button("测试音频播放").height(40).width(120).onClick(() => { //测试用，记得删掉
                   this.navPathStack.pushPathByName('Audio_test_page', null, true)
                   console.info('ButtonType.Normal');
-                }).offset({ y: -200 })
+                }).offset({ y: -160 })
               }
 
               Text('主屏幕')
@@ -334,12 +371,14 @@ struct Main {
           //避让标题位置
         }.tabBar(this.tabBarBuilder("sys.symbol.play_circle","主屏幕", 0))
 
+
         TabContent(){
           SongList();
         }.tabBar(this.tabBarBuilder("sys.symbol.music_fill","歌曲列表", 1))
-          CurveList();
+          CurveList({navPathStack: this.navPathStack});
         TabContent(){
         }.tabBar(this.tabBarBuilder("sys.symbol.indent_right","曲线选择", 2))
+
 
         TabContent(){
 
@@ -348,17 +387,19 @@ struct Main {
 
 
       }.barPosition(BarPosition.End)
+      .width('100%')
+      .height('100%')
+
 
       .barOverlap(true)     //设置悬浮开关
       .barFloatingStyle(
         {
           adaptToHandedness: true,
-          barBottomMargin: $r('sys.float.padding_level8'),
+          barBottomMargin: $r('sys.float.padding_level16'),
           systemMaterialEffect: {
             materialType: hdsMaterial.MaterialType.ADAPTIVE,
             materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
           },
-
         }
       )
       .onChange((index: number) => {
@@ -374,7 +415,28 @@ struct Main {
     }.width('100%')
     .height('100%')
     .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    .titleBar({content:{title:{mainTitle:this.pageName,mainTitleSize:20}}})
+    .backgroundBlurStyle(BlurStyle.NONE)
+
+
+    .titleBar({content:{title:{mainTitle:this.pageName,mainTitleSize:20}},style : {
+      scrollEffectOpts: {
+      enableScrollEffect: true,
+      scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+      blurEffectiveEndOffset: LengthMetrics.vp(64),
+    },
+      systemMaterialEffect: {
+        materialType: hdsMaterial.MaterialType.ADAPTIVE,
+        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+      },
+    },
+      avoidLayoutSafeArea: false,
+      enableComponentSafeArea: false,})
+
+
+    .ignoreLayoutSafeArea(
+      [LayoutSafeAreaType.SYSTEM],
+      [LayoutSafeAreaEdge.BOTTOM]
+    )
 
 
     .mode(NavDestinationMode.STANDARD)

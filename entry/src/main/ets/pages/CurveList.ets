@@ -168,6 +168,7 @@ struct CurveCard {
   onSettings: () => void = () => {
   };
 
+
   @Builder
   BPM_setting_builder() {
     Column() {
@@ -317,6 +318,7 @@ export struct CurveList {
   /** 当前选中的项：0 = 恒定BPM，1..n 对应 DEMO_CURVES 的下标 + 1 */
   @State selectedIndex: number = 0;
 
+
   build() {
       Scroll() {
         Column({ space: CARD_SPACE }) {
@@ -352,7 +354,12 @@ export struct CurveList {
           }, (item: CurveData) => item.title)
         }
         .width('100%')
-        .padding({ left: 16, right: 16, top: 16, bottom: 32 })
+        .padding({
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: 32
+        })
       }
       .width('100%')
       .height('100%')
@@ -363,13 +370,14 @@ export struct CurveList {
       .padding({ top: $r('sys.float.single_line_titlebar_height') })
 
 
+      /*
+      .titleBar({ content: { title: { mainTitle: '曲线列表', mainTitleSize: 20 } } })
+      .onReady((context: NavDestinationContext) => {
+        this.navPathStack = context.pathStack;
+      })
+      * */
 
-    /*
-    .titleBar({ content: { title: { mainTitle: '曲线列表', mainTitleSize: 20 } } })
-    .onReady((context: NavDestinationContext) => {
-      this.navPathStack = context.pathStack;
-    })
-    * */
+
   }
 
   /** 切换选中项，用 animateTo 让浮起 / 描边 / 阴影过渡 */
