@@ -64,7 +64,7 @@ const TEXT_SECONDARY: string = '#8A8F99';
 /** 悬浮胶囊 */
 const CAPSULE_BG: string = '#1B1B2F';
 const CAPSULE_HEIGHT: number = 44;
-const CAPSULE_BOTTOM_MARGIN: number = 32;
+const CAPSULE_BOTTOM_MARGIN: number = 100;
 /** 给胶囊留出的列表底部空间，保证最后一首歌能滚到胶囊上方 */
 const CAPSULE_RESERVE: number = CAPSULE_HEIGHT + CAPSULE_BOTTOM_MARGIN + 20;
 
@@ -169,7 +169,7 @@ struct SongRow {
 }
 
 @Component
-struct SongList {
+export struct SongList {
   @State navPathStack: NavPathStack = new NavPathStack();
   /** 当前播放列表：存的是 SONGS 里的下标，数组顺序＝播放顺序（最后加入的排最前） */
   @State selectedIndexes: number[] = [];
@@ -177,7 +177,6 @@ struct SongList {
   @State isSheetShow: boolean = false;
 
   build() {
-    HdsNavDestination() {
       Stack({ alignContent: Alignment.Bottom }) {
         List() {
           ForEach(SONGS, (song: SongData, index: number) => {
@@ -224,11 +223,8 @@ struct SongList {
           this.isSheetShow = false;
         }
       })
-    }
-    .titleBar({ content: { title: { mainTitle: '歌曲列表', mainTitleSize: 20 } } })
-    .onReady((context: NavDestinationContext) => {
-      this.navPathStack = context.pathStack;
-    })
+
+
   }
 
   /** 底部悬浮胶囊：汇总当前播放列表（首数 + 总时长），点它上拉面板 */

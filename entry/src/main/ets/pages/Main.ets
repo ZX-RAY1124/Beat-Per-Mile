@@ -11,28 +11,36 @@ import {
   ScrollEffectType,
 } from '@kit.UIDesignKit';
 import lottie, { AnimationItem } from '@ohos/lottie';
-
 import * as entry from 'libentry.so';
+import { SongList } from './SongList';
+import { CurveList } from './CurveList';
 
 console.log('模块对象='+JSON.stringify(entry));
 console.log('模块对象是否为undefined = ' + (entry === undefined));
 console.log(entry.test_audio("test_audio"));
+
+
 
 @Preview
 @Component
 struct Main {
 
   @State navPathStack: NavPathStack = new NavPathStack();
-  @State selected_id: number = 1;
+  @State selected_id: number = 0;
+  @State Button_selected_id : number = 0;
   @State windowWidth: number = 0;
   @State windowHeight: number = 0;
   @State gesture_offset: number = 0;
   @State gesture_start: number = 0;
   @State isMenuShow: boolean = false; //页面导航子菜单是否展开
+  @State title_name: string = '';
 
 
   @State Button_1 : Center_Button = new Center_Button(1)
   @State Button_2 : Center_Button = new Center_Button(2)
+  @State pageName: string = "主屏幕";
+
+  @State page_name_list : string[] = ["主屏幕","歌曲列表","曲线选择","设置"];
 
   @Builder
   Column_UP(){
@@ -43,6 +51,20 @@ struct Main {
       offsetX: 0,
       offsetY: 4})
     .margin(5);
+  }
+
+  @Builder
+  tabBarBuilder(resource: string, text: string, tabIndex: number) {
+    Column() {
+      SymbolGlyph($r(resource))
+        .fontSize(20)
+        .fontColor([this.selected_id === tabIndex ? Color.Blue : Color.Gray])
+        .padding({ bottom: 5 });
+      Text(text)
+        .fontSize(10)
+        .fontColor(this.selected_id === tabIndex ? Color.Blue : Color.Gray)
+        .textAlign(TextAlign.Center)
+    }
   }
 
   /**
@@ -101,11 +123,9 @@ struct Main {
 
   build() {
     HdsNavDestination() {
-      HdsTabs() {
+      HdsTabs({ index: this.selected_id }) {
         TabContent() {
           RelativeContainer() {
-
-
 
             Row({space:10}) { //标题三栏
               this.Column_UP();
@@ -116,7 +136,7 @@ struct Main {
                 'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
                 'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start},
               }
-            ).offset({y:20})
+            )
 
 
 
@@ -175,7 +195,7 @@ struct Main {
                 .onClick(() => {
 
                   this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
-                    this.selected_id = 1;
+                    this.Button_selected_id = 1;
 
 
                     if (this.Button_1.is_select) {
@@ -218,7 +238,7 @@ struct Main {
                 .onClick(() => {
 
                   this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
-                    this.selected_id = 2;
+                    this.Button_selected_id = 2;
 
                     if (this.Button_2.is_select) {
                       this.Button_2.unselect();
@@ -284,6 +304,8 @@ struct Main {
             // 页面导航入口：放在大圆下方、底部悬浮 tab 栏上方的空白区，周围没有别的元素。
             // 同时必须是 RelativeContainer 的最后一个子节点（后绘制的在上层），否则会被
             // 上面那个 100%×100% 的 Column 挡住。
+
+            /*
             Button('页面导航') //只负责进入我们自己写的页面，入口都放在 PageMenu() 子菜单里
               .height(40)
               .width(120)
@@ -301,10 +323,26 @@ struct Main {
                 'middle': { 'anchor': '__container__', 'align': HorizontalAlign.Center },
               })
               .offset({ y: -150 })
-          }
-        }.tabBar("11111")
+              * */
+          }.padding({ top: $r('sys.float.single_line_titlebar_height') })
+          //避让标题位置
+        }.tabBar(this.tabBarBuilder("sys.symbol.play_circle","主屏幕", 0))
+
+        TabContent(){
+          SongList();
+        }.tabBar(this.tabBarBuilder("sys.symbol.music_fill","歌曲列表", 1))
+          CurveList();
+        TabContent(){
+        }.tabBar(this.tabBarBuilder("sys.symbol.indent_right","曲线选择", 2))
+
+        TabContent(){
+
+        }.tabBar(this.tabBarBuilder("sys.symbol.gearshape", "设置", 3))
+
+
 
       }.barPosition(BarPosition.End)
+
       .barOverlap(true)     //设置悬浮开关
       .barFloatingStyle(
         {
@@ -317,11 +355,22 @@ struct Main {
 
         }
       )
+      .onChange((index: number) => {
+        this.getUIContext().animateTo({
+          duration: 200,
+          curve:Curve.EaseInOut
+        }, () => {
+          this.selected_id = index;
+          this.pageName = this.page_name_list[index];
+        })
+      })
 
     }.width('100%')
     .height('100%')
     .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    .titleBar({content:{title:{mainTitle:"今日统计",mainTitleSize:20}}})
+    .titleBar({content:{title:{mainTitle:this.pageName,mainTitleSize:20}}})
+
+
     .mode(NavDestinationMode.STANDARD)
     .onReady((context: NavDestinationContext) => {
         this.navPathStack = context.pathStack;

@@ -312,13 +312,12 @@ struct CurveCard {
 }
 
 @Component
-struct CurveList {
+export struct CurveList {
   @State navPathStack: NavPathStack = new NavPathStack();
   /** 当前选中的项：0 = 恒定BPM，1..n 对应 DEMO_CURVES 的下标 + 1 */
   @State selectedIndex: number = 0;
 
   build() {
-    HdsNavDestination() {
       Scroll() {
         Column({ space: CARD_SPACE }) {
           // 第一项固定是"恒定BPM"，只有一行字
@@ -362,11 +361,15 @@ struct CurveList {
       // HdsNavDestination 的标题栏是悬浮在内容之上的：这里让出标题栏的高度，
       // 否则列表第一项会和大标题重叠（滚动时内容也会从标题栏底下穿过去）
       .padding({ top: $r('sys.float.single_line_titlebar_height') })
-    }
+
+
+
+    /*
     .titleBar({ content: { title: { mainTitle: '曲线列表', mainTitleSize: 20 } } })
     .onReady((context: NavDestinationContext) => {
       this.navPathStack = context.pathStack;
     })
+    * */
   }
 
   /** 切换选中项，用 animateTo 让浮起 / 描边 / 阴影过渡 */
