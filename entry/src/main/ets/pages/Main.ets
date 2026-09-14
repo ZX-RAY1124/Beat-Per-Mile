@@ -102,6 +102,12 @@ struct Main {
           this.isMenuShow = false
           this.navPathStack.pushPathByName('CurveEdit_Page', null, true)
         })
+
+      MenuItem({ content: '播放器' })
+        .onClick(() => {
+          this.isMenuShow = false
+          this.navPathStack.pushPathByName('Player_Page', null, true)
+        })
     }
   }
 
