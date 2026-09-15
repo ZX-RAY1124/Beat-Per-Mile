@@ -35,9 +35,7 @@ struct audio_test {
             init();start();}})
           Button("暂停").width(60).height(30).onClick(()=> {stop();if(this.player) music_pause(this.player);});
           Button("终止").width(60).height(30).onClick(()=> {if(this.player) music_cancel(this.player);this.player = undefined;release(this.getUIContext().getHostContext() as common.UIAbilityContext);})
-          Button("初始化Native").width(200).height(40).onClick(()=> {
-            audioRendererInit();       //初始化播放器
-          });
+
           Button("从Native播放").width(200).height(40).onClick(()=> {
             copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "LostMemory.m4a").then((audioPath:string) => {
               musicAnalyse(audioPath);

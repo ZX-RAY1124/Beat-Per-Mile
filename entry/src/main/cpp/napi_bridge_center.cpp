@@ -59,9 +59,10 @@ private:
 };
 
 // ════════════════════════════════════════════
+              
 
-static OH_AudioRenderer* audioRenderer;
-static OH_AudioStreamBuilder* builder;                   //音频流构建器
+static std::vector<OH_AudioRenderer*> audioRenderers;   //音频流构建器
+static  std::vector<OH_AudioStreamBuilder*> builders;
 
 #undef LOG_DOMAIN
 #undef LOG_TAG
@@ -141,8 +142,22 @@ static void OnError_New(
              //改
 };
 
-static napi_value AudioRendererInit(napi_env env, napi_callback_info info){
+
+static void AudioRenderer_BuilderRelease(OH_AudioRenderer* audioRenderer, OH_AudioStreamBuilder* builder){
+    if(audioRenderer){
+        OH_AudioRenderer_Release(audioRenderer);
+        OH_AudioStreamBuilder_Destroy(builder);
+        audioRenderer = nullptr;
+        builder = nullptr;
+    }
+    //这里释放文件进程
+    
+    
+}
+
+static void AudioRendererInit(OH_AudioRenderer*& audioRenderer, OH_AudioStreamBuilder*& builder){
     OH_LOG_INFO(LOG_APP, "Now Add AudioRenderer");
+    /*
     if (audioRenderer){            //事先清理
         OH_AudioRenderer_Release(audioRenderer);
         OH_AudioStreamBuilder_Destroy(builder);
@@ -150,6 +165,7 @@ static napi_value AudioRendererInit(napi_env env, napi_callback_info info){
         audioRenderer = nullptr;
         builder = nullptr;
     }
+    */
     //============构建音频播放器============ 
     OH_AudioStreamBuilder_Create(&builder, AUDIOSTREAM_TYPE_RENDERER);
     
@@ -175,7 +191,6 @@ static napi_value AudioRendererInit(napi_env env, napi_callback_info info){
     OH_AudioStreamBuilder_SetRendererErrorCallback(builder, OnErrorCb, nullptr);
     OH_AudioRenderer_OnWriteDataCallback writeDataCb = OnWriteData_New;
     OH_AudioStreamBuilder_SetRendererWriteDataCallback(builder, writeDataCb, nullptr);
-    return nullptr;
 }
 
 static napi_value Add(napi_env env, napi_callback_info info)
@@ -281,11 +296,15 @@ static void TsfnFinalizeCallback(napi_env env, void *finalizeData, void *finaliz
 }
 
 static void clear(TsfnContext* ctx){
+    AudioRenderer_BuilderRelease(audioRenderers[ctx->playerId-1],builders[ctx->playerId-1]);
+    audioRenderers.erase(audioRenderers.begin());
+    builders.erase(builders.begin());
     napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
     {
         std::lock_guard<std::mutex> lock(g_mapMutex);
         g_downloadMap.erase(ctx->playerId);
     }
+    
 }
 
 
@@ -293,15 +312,27 @@ static void clear(TsfnContext* ctx){
 static void WorkerThread(TsfnContext *ctx, char filePath[]){
     bool finished = false;
     bool quit = false;
+    int num = ctx->playerId - 1;
     //============分析音频=============
     napi_acquire_threadsafe_function(ctx->tsfn);
     //work
     audio_processor audio_processor;
     audio_processor.load_audio(filePath);            //音频位置
+    OH_AudioRenderer* audioRenderer;
+    OH_AudioStreamBuilder* builder;
+    
+    AudioRendererInit(audioRenderer, builder);       //初始化
+
+    
+    builders.push_back(builder);
+    audioRenderers.push_back(audioRenderer);
+    
+    
+    
     
     // 使用源音频采样率覆盖 builder（源文件 vs 硬编码 48kHz）
-    OH_AudioStreamBuilder_SetSamplingRate(builder, audio_processor.sample_rate);
-    OH_AudioStreamBuilder_GenerateRenderer(builder, &audioRenderer);   
+    OH_AudioStreamBuilder_SetSamplingRate(builders[num], audio_processor.sample_rate);
+    OH_AudioStreamBuilder_GenerateRenderer(builders[num], &audioRenderers[num]);   
     
     //===========LiveStretchPlayer==============
     LiveStretchPlayer player(2, audio_processor.sample_rate, audio_processor.total_frame, 1.0, 512);
@@ -340,16 +371,16 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     });
     
     player.loadAudio(audio_processor.make_planner_data(), audio_processor.total_frame);
-    
+    OH_AudioRenderer_Start(audioRenderers[num]);            //开始播放
+
     player.play();                                     //加载音频流
-    OH_AudioRenderer_Start(audioRenderer);            //开始播放
     g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
     //播放器循环
     while(!finished && !quit){
         player.setSpeed(dataClip->accelerate);
         if(ctx->cancelled.load()){
             quit = true;
-            OH_AudioRenderer_Stop(audioRenderer);
+            OH_AudioRenderer_Stop(audioRenderers[num]);
             clear(ctx);
             continue;
 
@@ -358,7 +389,7 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         while (ctx->paused.load()) {
             if(ctx->cancelled.load()){
                 quit = true;
-                OH_AudioRenderer_Stop(audioRenderer);
+                OH_AudioRenderer_Stop(audioRenderers[num]);
                 clear(ctx);
                 break;
             }
@@ -432,7 +463,7 @@ static napi_value musicPause(napi_env env, napi_callback_info info){
     int id;
     napi_get_value_int32(env, args[0], &id);
     
-    OH_AudioRenderer_Pause(audioRenderer);           //暂停音频
+    OH_AudioRenderer_Pause(audioRenderers[id-1]);           //暂停音频
     
     std::lock_guard<std::mutex> lock(g_mapMutex);
     auto it = g_downloadMap.find(id);
@@ -462,7 +493,7 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
     }
     
     // 最后启动 AudioRenderer（此时环形缓冲区已有数据，避免 underrun）
-    OH_AudioRenderer_Start(audioRenderer);
+    OH_AudioRenderer_Start(audioRenderers[id-1]);
     
     return nullptr;
 }
@@ -472,10 +503,13 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     
+    napi_value number;
+    
     int id;
-    OH_AudioRenderer_Stop(audioRenderer);         //结束播放
  
     napi_get_value_int32(env, args[0], &id);
+    OH_AudioRenderer_Stop(audioRenderers[id - 1]);         //结束播放
+
 
     std::lock_guard<std::mutex> lock(g_mapMutex);
     auto it = g_downloadMap.find(id);
@@ -488,17 +522,7 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
     return nullptr;
 }
 
-static napi_value AudioRendererRelease(napi_env env, napi_callback_info info){
-    if(audioRenderer){
-        OH_AudioRenderer_Release(audioRenderer);
-        OH_AudioStreamBuilder_Destroy(builder);
-        audioRenderer = nullptr;
-        builder = nullptr;
-    }
-    //这里释放文件进程
-    
-    return nullptr;
-}
+
 
 //音乐调度bridge
 
@@ -577,8 +601,6 @@ static napi_value Init(napi_env env, napi_value exports)
         {"music_resume", nullptr, musicResume, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"music_cancel", nullptr, musicCancel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"music_pause", nullptr, musicPause, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"audioRendererInit", nullptr, AudioRendererInit, nullptr, nullptr, nullptr, napi_writable, nullptr},
-        {"audioRendererRelease", nullptr, AudioRendererRelease, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"changeSpeed", nullptr, speedChange, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"musicAnalyse", nullptr, analyzeMusic, nullptr, nullptr, nullptr, napi_default, nullptr}
     };

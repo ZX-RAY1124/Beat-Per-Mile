@@ -40,6 +40,7 @@ class topColumnMaker{
 @Component
 struct Main {
 
+  @State g_Visibility: boolean = true;                   //全局显示、隐藏
   @State navPathStack: NavPathStack = new NavPathStack();
   @State selected_id: number = 0;
   @State Button_selected_id : number = 0;
@@ -236,6 +237,8 @@ struct Main {
                 .offset({ y: this.Button_1.offset_y })
                 .renderGroup(true)
                 .onClick(() => {
+
+                 // this.navPathStack.pushPathByName('Player_Page', null, true);
 
                   this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
                     this.Button_selected_id = 1;
