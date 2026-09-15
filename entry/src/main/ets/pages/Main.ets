@@ -16,6 +16,7 @@ import lottie, { AnimationItem } from '@ohos/lottie';
 import * as entry from 'libentry.so';
 import { SongList } from './SongList';
 import { CurveList } from './CurveList';
+import { Settings } from './Settings';
 
 console.log('模块对象='+JSON.stringify(entry));
 console.log('模块对象是否为undefined = ' + (entry === undefined));
@@ -145,6 +146,7 @@ struct Main {
           this.isMenuShow = false
           this.navPathStack.pushPathByName('Player_Page', null, true)
         })
+
     }
   }
 
@@ -378,13 +380,19 @@ struct Main {
         TabContent(){
           SongList();
         }.tabBar(this.tabBarBuilder("sys.symbol.music_fill","歌曲列表", 1))
-          CurveList({navPathStack: this.navPathStack});
+
+
+        // 注意：HdsTabs 的直接子节点必须全部是 TabContent。
+        // 之前 CurveList(...) 被写在了两个 TabContent 中间，它会被算作一个"占位子节点"，
+        // 导致后面 TabContent 的索引整体后移一位：点"设置"实际显示的是空的"曲线选择"，
+        // 点"曲线选择"实际显示的是曲线列表。页面组件一律写进 TabContent 里面。
         TabContent(){
+          CurveList({navPathStack: this.navPathStack});
         }.tabBar(this.tabBarBuilder("sys.symbol.indent_right","曲线选择", 2))
 
 
         TabContent(){
-
+          Settings({ navPathStack: this.navPathStack });
         }.tabBar(this.tabBarBuilder("sys.symbol.gearshape", "设置", 3))
 
 

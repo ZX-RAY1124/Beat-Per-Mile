@@ -106,10 +106,8 @@ const UNIT_FONT_VP: number = 12;          // 轴单位 BPM / min
 const POINT_FONT_VP: number = 12;         // 数据点序号
 const POINT_FONT_CURRENT_VP: number = 14; // 当前编辑点的序号
 
-/** vp 字号 → canvas 的 font 字符串（按屏幕密度换算成物理 px） */
-function chartFont(vpSize: number): string {
-  return Math.round(vp2px(vpSize)).toString() + 'px sans-serif';
-}
+// vp 字号 → canvas font 字符串的换算放在组件里的 chartFont() 方法上
+// （全局的 vp2px 已标记废弃，要用 UIContext 上的那个）
 
 /** 图表配色：跟着界面背景走，比背景略深一点、带一点暖黄 */
 const CHART_BG: string = '#F8F6EF';
@@ -616,6 +614,15 @@ struct CurveEdit {
 
   // ==================== 绘图 ====================
 
+  /**
+   * vp 字号 → canvas 的 font 字符串
+   * canvas 的 font 里那个 "px" 是物理像素，而画布坐标是 vp，所以要按屏幕密度换算
+   * （用 UIContext 上的换算方法；全局的 vp2px 已经标记废弃了）
+   */
+  private chartFont(vpSize: number): string {
+    return Math.round(this.getUIContext().vp2px(vpSize)).toString() + 'px sans-serif';
+  }
+
   private drawChart(): void {
     const w: number = this.ctx.width;
     const h: number = this.ctx.height;
@@ -647,7 +654,7 @@ struct CurveEdit {
 
     // 竖向网格 + 时间刻度
     const stepMin: number = niceTimeStep(viewMinutes);
-    ctx.font = chartFont(TICK_FONT_VP); //横纵轴的刻度数字都用这个字号
+    ctx.font = this.chartFont(TICK_FONT_VP); //横纵轴的刻度数字都用这个字号
     for (let t = Math.ceil(startMinute / stepMin) * stepMin; t <= endMinute + 0.001; t += stepMin) {
       const x: number = toX(t);
       ctx.strokeStyle = CHART_GRID;
@@ -687,7 +694,7 @@ struct CurveEdit {
 
     // 轴单位：纵轴 BPM（左上角外侧），横轴 min（右下角下方）
     ctx.fillStyle = CHART_TEXT;
-    ctx.font = chartFont(UNIT_FONT_VP);
+    ctx.font = this.chartFont(UNIT_FONT_VP);
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     //"BPM" 放在最上沿：贴着最上面那条刻度（240）会撞在一起
@@ -768,7 +775,7 @@ struct CurveEdit {
         tx = labelXMax;
       }
       ctx.fillStyle = isCurrent ? CHART_LINE : CHART_TEXT;
-      ctx.font = chartFont(isCurrent ? POINT_FONT_CURRENT_VP : POINT_FONT_VP);
+      ctx.font = this.chartFont(isCurrent ? POINT_FONT_CURRENT_VP : POINT_FONT_VP);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
       ctx.fillText((i + 1).toString(), tx, y - (isCurrent ? 17 : 11));
