@@ -31,6 +31,11 @@
       "buildFunction": "load"
     },
     {
+      "name": "TagEdit_Page",
+      "pageSourceFile": "src/main/ets/pages/TagEdit.ets",
+      "buildFunction": "load"
+    },
+    {
       "name": "Animation_test_Page",
       "pageSourceFile": "src/main/ets/pages/Animation_test.ets",
       "buildFunction": "load"

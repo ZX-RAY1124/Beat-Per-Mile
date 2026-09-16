@@ -150,6 +150,12 @@ struct Main {
           this.navPathStack.pushPathByName('Player_Page', null, true)
         })
 
+      MenuItem({ content: '标签编辑' })
+        .onClick(() => {
+          this.isMenuShow = false
+          this.navPathStack.pushPathByName('TagEdit_Page', null, true)
+        })
+
     }
   }
 

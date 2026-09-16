@@ -1,6 +1,17 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import {
+  appendCurve,
+  CurveEditParam,
+  CurveFile,
+  CurvePointJson,
+  CurveTagJson,
+  loadAll,
+  minToSec,
+  POINT_TYPE_LINEAR,
+  saveAt,
+  secToMin
+} from '../ets_libs/CurveStore';
 
 /**
  * 曲线编辑页
@@ -32,25 +43,13 @@ import { common } from '@kit.AbilityKit';
  */
 
 /**
- * 保存出去的数据
- * 接上曲线列表后换成 ets_libs/CurveModel.ets 里的公共模型（见文档 5.2），
- * 现在先在本页里定义一份，落盘和回传都用它
+ * 落盘用的数据结构统一放在 ets_libs/CurveStore.ets：
+ *   一个曲线文件 = { name, points[{time(秒), bpm, type}], tags[{time(秒), text}] }
+ * ⚠️ 文件里的 time 是秒，界面上的 time 是分钟，转换只走 secToMin / minToSec
+ *
+ * 注意：json 格式里没有"循环"这个字段（isLoop），所以它只存在于本次编辑，
+ * 存不进文件 —— 要持久化的话得在格式里加一个字段。
  */
-interface CurvePointData {
-  time: number;
-  bpm: number;
-}
-
-interface CurveDraft {
-  title: string;
-  totalMinutes: number;
-  isLoop: boolean;
-  points: CurvePointData[];
-}
-
-/** 本地存储：和歌曲列表约定用同一个 store */
-const STORE_NAME: string = 'beat_per_mile';
-const KEY_CURVE_DRAFT: string = 'curve_editor_draft';
 
 /** 曲线上的一个编辑点 */
 class EditPoint {
@@ -328,7 +327,7 @@ struct CurveEdit {
   @State navPathStack: NavPathStack = new NavPathStack();
 
   // ---- 数据 ----
-  /** 曲线名称；现在只有名称框在用，接数据后由跳转参数带入（见文档 5.4） */
+  /** 曲线名称：列表跳过来时带 { index }，读盘后填进来（见 loadCurve） */
   @State curveTitle: string = '';
   /** 跑完一趟是否循环整条曲线 */
   @State isLoop: boolean = true;
@@ -353,6 +352,13 @@ struct CurveEdit {
   private viewStartBase: number = 0;
   /** 是否已经在退出流程里：防止弹窗里调 pop 又被 onBackPressed 拦一次（不参与渲染） */
   private leaving: boolean = false;
+  /** 正在编辑第几条曲线（0 开始）；-1 表示还没绑定文件，保存时会新建一个 */
+  private curveIndex: number = -1;
+  /**
+   * 原文件里的标签，保存时原样写回去
+   * ⚠️ 曲线和标签在同一个 json 里，保存曲线时如果不带上它，标签就被抹掉了
+   */
+  private savedTags: CurveTagJson[] = [];
 
   // ---- 拖点状态（不参与渲染）----
   /** 正在被拖的点的 id；-1 表示这次拖动是在拖时间轴 */
@@ -368,8 +374,7 @@ struct CurveEdit {
   aboutToAppear(): void {
     this.timeText = formatMinutes(this.currentTime());
     this.bpmText = this.currentBpm().toString();
-    // 把上次保存的曲线读回来（接上曲线列表的传参后，这里改成"有传参就用传参"）
-    this.loadDraft();
+    // 数据在 onReady 里按路由参数读（见下面的 onReady）
   }
 
   build() {
@@ -543,6 +548,11 @@ struct CurveEdit {
     })
     .onReady((context: NavDestinationContext) => {
       this.navPathStack = context.pathStack;
+      // 列表页进来时带了 { index }，按它去磁盘读这条曲线
+      const param: CurveEditParam = context.pathInfo.param as CurveEditParam;
+      if (param !== undefined && param !== null) {
+        this.loadCurve(param.index);
+      }
     })
   }
 
@@ -1243,19 +1253,23 @@ struct CurveEdit {
     return this.curveTitle.length > 0 ? this.curveTitle : '未命名曲线';
   }
 
-  /** 打包成要保存 / 回传的数据 */
-  private buildDraft(): CurveDraft {
-    const pts: CurvePointData[] = [];
+  /** 打包成要落盘的曲线文件（界面上的分钟 → 文件里的秒） */
+  private buildCurveFile(): CurveFile {
+    const pts: CurvePointJson[] = [];
     for (let i = 0; i < this.points.length; i++) {
-      pts.push({ time: this.points[i].time, bpm: this.points[i].bpm });
+      pts.push({
+        time: minToSec(this.points[i].time),
+        bpm: this.points[i].bpm,
+        type: POINT_TYPE_LINEAR
+      });
     }
-    const draft: CurveDraft = {
-      title: this.curveTitleText(),
-      totalMinutes: this.totalMinutes,
-      isLoop: this.isLoop,
-      points: pts
+    const file: CurveFile = {
+      name: this.curveTitleText(),
+      points: pts,
+      //标签原样带回去：曲线和标签在同一个 json 里，不带上就把标签抹掉了
+      tags: this.savedTags
     };
-    return draft;
+    return file;
   }
 
   /** 点"保存"按钮：先弹窗确认 */
@@ -1288,7 +1302,7 @@ struct CurveEdit {
       primaryButton: {
         value: '丢弃',
         action: () => {
-          this.popEditor(false);
+          this.popEditor();
         }
       },
       secondaryButton: {
@@ -1301,64 +1315,79 @@ struct CurveEdit {
   }
 
   /** 保存（留在本页），存完给个提示 */
-  private async saveCurve(): Promise<void> {
-    const ok: boolean = await this.writeDraft(this.buildDraft());
+  private saveCurve(): void {
+    const ok: boolean = this.saveCurveFile();
     this.getUIContext().getPromptAction().showToast({ message: ok ? '已保存' : '保存失败' });
   }
 
   /** 保存再退出 */
-  private async saveAndExit(): Promise<void> {
-    await this.writeDraft(this.buildDraft());
-    this.popEditor(true);
+  private saveAndExit(): void {
+    this.saveCurveFile();
+    this.popEditor();
   }
 
-  private async writeDraft(draft: CurveDraft): Promise<boolean> {
+  /**
+   * 写盘：已经绑定文件就覆盖，否则新建一条（成为 n+1.json）并记住新的下标
+   * 这样从主页菜单直接进来（没有传参）也能保存
+   */
+  private saveCurveFile(): boolean {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     if (ctx === undefined || ctx === null) {
       return false;
     }
-    try {
-      const store: preferences.Preferences = await preferences.getPreferences(ctx, STORE_NAME);
-      await store.put(KEY_CURVE_DRAFT, JSON.stringify(draft));
-      await store.flush();
-      return true;
-    } catch (err) {
-      console.error('保存曲线失败：' + JSON.stringify(err));
+    const file: CurveFile = this.buildCurveFile();
+    if (this.curveIndex >= 0) {
+      return saveAt(ctx, this.curveIndex, file);
+    }
+    const newIndex: number = appendCurve(ctx, file);
+    if (newIndex < 0) {
       return false;
     }
+    this.curveIndex = newIndex;
+    return true;
   }
 
-  /** 退出编辑页；keep=true 时把结果回传给调用方（配合 pushPathByName 的 onPop，见文档 5.5） */
-  private popEditor(keep: boolean): void {
+  /**
+   * 退出编辑页。
+   *
+   * 这里只 pop、不回传结果：列表的刷新走 CurveStore 的写盘通知（storeRevision），
+   * 不依赖 pushPathByName 的 onPop 回调（那个回调在标签编辑页上实测不触发）。
+   */
+  private popEditor(): void {
     this.leaving = true;
-    if (keep) {
-      this.navPathStack.pop(this.buildDraft(), true);
-    } else {
-      this.navPathStack.pop();
-    }
+    this.navPathStack.pop();
   }
 
-  /** 进入页面时把上次保存的读回来；没有就用默认曲线 */
-  private async loadDraft(): Promise<void> {
+  /** 按序号从磁盘读一条曲线装进编辑器；读不到就保持默认曲线 */
+  private loadCurve(index: number): void {
+    if (index < 0) {
+      return;
+    }
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     if (ctx === undefined || ctx === null) {
       return;
     }
-    try {
-      const store: preferences.Preferences = await preferences.getPreferences(ctx, STORE_NAME);
-      const text: string = await store.get(KEY_CURVE_DRAFT, '') as string;
-      if (text.length === 0) {
-        return; //第一次进来，保持默认的两点直线
-      }
-      this.applyDraft(JSON.parse(text) as CurveDraft);
-    } catch (err) {
-      console.error('读取曲线失败：' + JSON.stringify(err));
+    const files: CurveFile[] = loadAll(ctx);
+    if (index >= files.length) {
+      console.error('曲线不存在：' + index);
+      return;
     }
+    const file: CurveFile = files[index];
+    this.curveIndex = index;
+    this.curveTitle = file.name;
+    this.savedTags = file.tags;
+    this.applyCurveFile(file);
   }
 
-  /** 把读到的数据装进编辑器，顺带把三条不变量修一遍 */
-  private applyDraft(draft: CurveDraft): void {
-    let total: number = Math.round(draft.totalMinutes);
+  /**
+   * 把文件内容装进编辑器：秒 → 分钟，并把三条不变量修一遍
+   * 总长度取最后一个点的时间（文件格式里没有单独的"总时长"字段）
+   */
+  private applyCurveFile(file: CurveFile): void {
+    if (file.points.length < 2) {
+      return; //数据不完整，保持默认曲线
+    }
+    let total: number = Math.round(secToMin(file.points[file.points.length - 1].time));
     if (total < TOTAL_MIN) {
       total = TOTAL_MIN;
     }
@@ -1367,19 +1396,17 @@ struct CurveEdit {
     }
     this.totalMinutes = total;
     this.totalText = total.toString();
-    this.curveTitle = draft.title;
-    this.isLoop = draft.isLoop;
 
     const list: EditPoint[] = [];
-    for (let i = 0; i < draft.points.length; i++) {
-      let t: number = draft.points[i].time;
+    for (let i = 0; i < file.points.length; i++) {
+      let t: number = secToMin(file.points[i].time);
       if (t < 0) {
         t = 0;
       }
       if (t > total) {
         t = total;
       }
-      let b: number = Math.round(draft.points[i].bpm);
+      let b: number = Math.round(file.points[i].bpm);
       if (b < BPM_MIN) {
         b = BPM_MIN;
       }
@@ -1388,15 +1415,10 @@ struct CurveEdit {
       }
       list.push(new EditPoint(i, t, b));
     }
-
-    if (list.length < 2) {
-      this.points = copyPoints(DEFAULT_POINTS); //数据不完整，退回默认曲线
-    } else {
-      list.sort((a: EditPoint, c: EditPoint): number => a.time - c.time);
-      list[0].time = 0; //不变量 1：头在 0
-      list[list.length - 1].time = total; //不变量 2：尾在总长度
-      this.points = list;
-    }
+    list.sort((a: EditPoint, c: EditPoint): number => a.time - c.time);
+    list[0].time = 0; //不变量 1：头在 0
+    list[list.length - 1].time = total; //不变量 2：尾在总长度
+    this.points = list;
 
     this.currentNo = 1;
     this.currentText = '1';

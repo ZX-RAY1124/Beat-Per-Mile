@@ -1,6 +1,17 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
+import {
+  appendCurve,
+  count,
+  CurveEditParam,
+  CurveFile,
+  deleteAt,
+  emptyCurve,
+  loadAll,
+  pointsToPreview,
+  secToMin
+} from '../ets_libs/CurveStore';
 
 /**
  * 曲线列表页
@@ -21,8 +32,12 @@ class CurveData {
   lineColor: string;
   /** 折线下方面积的填充色 */
   fillColor: string;
-  /** 预览折线的 y 值，取值 0~1（0 = 顶部），按 x 均匀铺满整个预览区 */
+  /** 预览折线的 y 值，取值 0~1（0 = 顶部） */
   points: number[];
+  /** 每个点的归一化时间位置（0~1），让预览按真实时间铺开 */
+  pointX: number[] = [];
+  /** 标签指针的归一化时间位置（0~1） */
+  tagX: number[] = [];
 
   constructor(title: string, lineColor: string, fillColor: string, points: number[]) {
     this.title = title;
@@ -32,7 +47,7 @@ class CurveData {
   }
 }
 
-/** 演示数据：三个曲线项 */
+/** 演示数据：三个曲线项（已由磁盘数据取代，保留类型定义） */
 
 
 const COLOR_PLAN:string[][] = [          //配色方案
@@ -46,7 +61,16 @@ const COLOR_PLAN:string[][] = [          //配色方案
 const CARD_RADIUS: number = 18;   // 圆角
 const CARD_SPACE: number = 18;    // 卡片间距
 const CARD_ACCENT: string = '#FF6B6B'; // 恒定BPM 用的描边色
+/** 卡片缩略图里标签指针的颜色（和标签编辑页保持一致） */
+const TAG_MARK_COLOR: string = '#2FB3A8';
 const LIFT: number = 6;           // 选中时向左上浮起的距离
+
+/** 卡片右侧三个操作图标 */
+const ICON_SIZE: number = 22;
+const ICON_GAP: number = 6;          // 设置 ↔ 标签：同一组，挨近一点
+const ICON_GAP_DANGER: number = 20;  // 标签 ↔ 删除：拉开距离，防止误触
+const ICON_COLOR: string = '#8A8F99';
+const ICON_DANGER: string = '#D98C8C';
 
 /**
  * 描边宽度是"恒定"的，选中与否只切换描边的颜色。
@@ -69,6 +93,10 @@ const CARD_INSET_V_TEXT: number = 20;  // 只有一行字时，上下留白
 @Component
 struct CurvePreview {
   points: number[] = [];
+  /** 每个点在时间轴上的归一化位置（0~1）；给空数组就按等距画 */
+  pointX: number[] = [];
+  /** 标签指针的归一化位置（0~1）。这里只画竖线，不画序号和文字 —— 预览区太挤 */
+  tagX: number[] = [];
   lineColor: string = CARD_ACCENT;
   fillColor: string = 'rgba(255,107,107,0.14)';
 
@@ -121,24 +149,41 @@ struct CurvePreview {
     const pad: number = 6;
     const innerW: number = w - pad * 2;
     const innerH: number = h - pad * 2;
-    const stepX: number = innerW / (n - 1);
+
+    // 点的横向位置优先用真实时间比例，这样标签指针和曲线的位置才对得上；
+    // 没给时间就退化成等距（老数据）
+    const byTime: boolean = this.pointX.length === n;
+    const xOf = (i: number): number => {
+      return byTime ? pad + this.pointX[i] * innerW : pad + innerW * i / (n - 1);
+    };
 
     // 折线下方的淡色面积
     this.ctx.beginPath();
-    this.ctx.moveTo(pad, h);
+    this.ctx.moveTo(xOf(0), h);
     for (let i = 0; i < n; i++) {
-      this.ctx.lineTo(pad + stepX * i, pad + this.points[i] * innerH);
+      this.ctx.lineTo(xOf(i), pad + this.points[i] * innerH);
     }
-    this.ctx.lineTo(pad + innerW, h);
+    this.ctx.lineTo(xOf(n - 1), h);
     this.ctx.closePath();
     this.ctx.fillStyle = this.fillColor;
     this.ctx.fill();
 
-    // 折线本身
+    // 标签指针：一条竖线
+    this.ctx.strokeStyle = TAG_MARK_COLOR;
+    this.ctx.lineWidth = 1.5;
+    for (let i = 0; i < this.tagX.length; i++) {
+      const tx: number = pad + this.tagX[i] * innerW;
+      this.ctx.beginPath();
+      this.ctx.moveTo(tx, pad);
+      this.ctx.lineTo(tx, h - pad);
+      this.ctx.stroke();
+    }
+
+    // 折线本身（画在标签之后，免得被竖线盖住）
     this.ctx.beginPath();
-    this.ctx.moveTo(pad, pad + this.points[0] * innerH);
+    this.ctx.moveTo(xOf(0), pad + this.points[0] * innerH);
     for (let i = 1; i < n; i++) {
-      this.ctx.lineTo(pad + stepX * i, pad + this.points[i] * innerH);
+      this.ctx.lineTo(xOf(i), pad + this.points[i] * innerH);
     }
     this.ctx.strokeStyle = this.lineColor;
     this.ctx.lineWidth = 2;
@@ -163,6 +208,8 @@ struct CurveCard {
   // 静态数据
   title: string = '';
   points: number[] = [];
+  pointX: number[] = [];
+  tagX: number[] = [];
   lineColor: string = CARD_ACCENT;
   fillColor: string = 'rgba(255,107,107,0.14)';
   accentColor: string = CARD_ACCENT;
@@ -173,7 +220,53 @@ struct CurveCard {
   };
   onSettings: () => void = () => {
   };
+  onTags: () => void = () => {
+  };
+  onDelete: () => void = () => {
+  };
 
+
+  /**
+   * 卡片右侧的操作图标
+   *   - 曲线卡片：设置 / 标签 / 删除 三个竖排
+   *   - 恒定BPM：只有一个设置图标
+   *     （它是单值，既没有曲线可删、也不需要标签，所以那一行保持原来的高度）
+   *
+   * 删除和上面两个之间留了更大的间距，防止点标签时误触删除
+   */
+  @Builder
+  CardActions() {
+    Column() {
+      SymbolGlyph($r('sys.symbol.gearshape'))
+        .fontSize(ICON_SIZE)
+        .fontColor([ICON_COLOR])
+        .onClick(() => {
+          if (this.points.length >= 2) {
+            this.onSettings();
+          } else {
+            this.show_BPM_setting(); //恒定BPM 是单值，弹自己的设置框
+          }
+        })
+
+      if (this.points.length >= 2) {
+        SymbolGlyph($r('sys.symbol.bookmark')) //"标签"用书签符号（sys.symbol.tag 不存在）
+          .fontSize(ICON_SIZE)
+          .fontColor([ICON_COLOR])
+          .margin({ top: ICON_GAP })
+          .onClick(() => {
+            this.onTags();
+          })
+
+        SymbolGlyph($r('sys.symbol.trash'))
+          .fontSize(ICON_SIZE)
+          .fontColor([ICON_DANGER])
+          .margin({ top: ICON_GAP_DANGER })
+          .onClick(() => {
+            this.onDelete();
+          })
+      }
+    }
+  }
 
   @Builder
   BPM_setting_builder() {
@@ -250,6 +343,8 @@ struct CurveCard {
           Column() {
             CurvePreview({         //缩略图
               points: this.points,
+              pointX: this.pointX,
+              tagX: this.tagX,
               lineColor: this.lineColor,
               fillColor: this.fillColor
             })
@@ -257,12 +352,7 @@ struct CurveCard {
           .layoutWeight(1)
           .height(72)
 
-          SymbolGlyph($r('sys.symbol.gearshape'))          //设置图标
-            .fontSize(24)
-            .fontColor(['#8A8F99'])
-            .onClick(() => {
-              this.onSettings();
-            })
+          this.CardActions()                              //设置 / 标签 / 删除
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
@@ -273,20 +363,18 @@ struct CurveCard {
           .fontColor('#1B1B2F')
           .width('100%')
           .textAlign(TextAlign.Start)
-          Row({space:12}) {
+          Row({ space: 12 }) {
             Text("默认BPM:" + this.realBPM)
-              .width(277.14)
+              // 原来写死 277.14：卡片宽度一变就把右边的图标挤歪，
+              // 改成占满剩余空间，图标才会和其它卡片对齐
+              .layoutWeight(1)
               .fontSize(12)
               .textAlign(TextAlign.Start)
 
-            SymbolGlyph($r('sys.symbol.gearshape'))
-              .fontSize(24)
-              .fontColor(['#8A8F99'])
-              .onClick(() => {
-                //弹窗
-                this.show_BPM_setting();
-              })
+            this.CardActions()
           }
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
 
       }
     }
@@ -321,17 +409,99 @@ struct CurveCard {
 @Component
 export struct CurveList {
   @State navPathStack: NavPathStack = new NavPathStack();
-  /** 当前选中的项：0 = 恒定BPM，1..n 对应 DEMO_CURVES 的下标 + 1 */
+  /** 当前选中的项：0 = 恒定BPM，1..n 对应 CURVES 的下标 + 1 */
   @State selectedIndex: number = 0;
+  /**
+   * 每次重新读盘就 +1，然后接到 ForEach 的键里。
+   *
+   * 为什么需要它：卡片上的 points / pointX / tagX 是**普通成员**（只有 selected 是 @Prop），
+   * 而普通成员只在组件创建时初始化一次，父组件重建时不会更新。
+   * 键不变 → ForEach 复用旧卡片 → 缩略图一直是进编辑页之前的样子。
+   * 让键跟着版本号变，卡片整体重建，才能拿到新数据。
+   */
+  @State listRevision: number = 0;
+
+  /**
+   * 曲线数据的全局版本号（CurveStore 里每次写盘都会 +1）。
+   *
+   * 为什么不用 pushPathByName 的 onPop 回调刷新：实测**标签编辑页返回时那个回调不触发**，
+   * 于是 json 改了、列表却不重读，缩略图一直是旧的（曲线编辑页那条路看起来是好的，但不能依赖）。
+   * 改成"谁写盘谁通知"，列表页 @Watch 到就重读，跟用户怎么退出编辑页、有没有走回调都无关。
+   */
+  // 键名是字面量：@StorageLink 的参数必须是字符串字面量。
+  // 它和 CurveStore 里的 CURVE_REVISION_KEY 是同一个 key（'curveStoreRevision'）。
+  @StorageLink('curveStoreRevision') @Watch('onStoreChanged') storeRevision: number = 0;
+
+  /** 磁盘变了：重读一遍（编辑页保存/删除时由 CurveStore 通知过来） */
+  onStoreChanged(): void {
+    this.reloadCurves();
+  }
+
   PAGE_BG: string = '#F5F6F8';
-  @State CURVES: CurveData[] = [
-    new CurveData('渐进加速', '#FF6B6B', 'rgba(255,107,107,0.14)',
-      [0.82, 0.74, 0.66, 0.58, 0.48, 0.40, 0.30, 0.22]),
-    new CurveData('波浪起伏', '#4ECDC4', 'rgba(78,205,196,0.14)',
-      [0.52, 0.30, 0.58, 0.28, 0.62, 0.34, 0.54, 0.32]),
-    new CurveData('阶梯爬升', '#A78BFA', 'rgba(167,139,250,0.14)',
-      [0.86, 0.86, 0.64, 0.64, 0.42, 0.42, 0.24, 0.24]),
-  ];
+  /** 曲线列表：内容来自 <filesDir>/Curve/*.json，顺序就是文件名顺序 */
+  @State CURVES: CurveData[] = [];
+
+  aboutToAppear(): void {
+    this.reloadCurves();
+  }
+
+  /** 从磁盘重新读一遍曲线列表 */
+  private reloadCurves(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (ctx === undefined || ctx === null) {
+      return;
+    }
+    const files: CurveFile[] = loadAll(ctx);
+    const out: CurveData[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const plan: string[] = COLOR_PLAN[i % COLOR_PLAN.length];
+      const card: CurveData = new CurveData(files[i].name, plan[0], plan[1],
+        pointsToPreview(files[i].points));
+      // 缩略图按真实时间铺开，标签指针才落得准
+      const total: number = this.curveTotalMinutes(files[i]);
+      const pTimes: number[] = [];
+      for (let k = 0; k < files[i].points.length; k++) {
+        pTimes.push(files[i].points[k].time);
+      }
+      card.pointX = this.normalizedX(pTimes, total);
+      const tTimes: number[] = [];
+      for (let k = 0; k < files[i].tags.length; k++) {
+        tTimes.push(files[i].tags[k].time);
+      }
+      card.tagX = this.normalizedX(tTimes, total);
+      out.push(card);
+    }
+    this.CURVES = out;
+    this.listRevision = this.listRevision + 1; //让 ForEach 的键变化，卡片重建
+    if (this.selectedIndex > out.length) {
+      this.selectedIndex = 0;
+    }
+  }
+
+  /** 曲线总时长（分钟）：取最后一个点的时间，兜底 1 分钟 */
+  private curveTotalMinutes(file: CurveFile): number {
+    if (file.points.length === 0) {
+      return 1;
+    }
+    const last: number = secToMin(file.points[file.points.length - 1].time);
+    return last > 0 ? last : 1;
+  }
+
+  /** 一串"秒"→ 归一化横向位置（0~1） */
+  private normalizedX(times: number[], totalMinutes: number): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < times.length; i++) {
+      let v: number = secToMin(times[i]) / totalMinutes;
+      if (v < 0) {
+        v = 0;
+      }
+      if (v > 1) {
+        v = 1;
+      }
+      out.push(v);
+    }
+    return out;
+  }
 
 
 
@@ -349,7 +519,8 @@ export struct CurveList {
               this.select(0);
             },
             onSettings: () => {
-              this.openSettings('恒定BPM');
+              //恒定BPM 的齿轮弹的是自己的输入框（见 CurveCard.CardActions），这里走不到
+              this.openSettings(-1);
             }
           })
 
@@ -357,6 +528,8 @@ export struct CurveList {
             CurveCard({
               title: item.title,
               points: item.points,
+              pointX: item.pointX,
+              tagX: item.tagX,
               lineColor: item.lineColor,
               fillColor: item.fillColor,
               accentColor: item.lineColor,
@@ -365,10 +538,17 @@ export struct CurveList {
                 this.select(index + 1);
               },
               onSettings: () => {
-                this.openSettings(item.title);
+                this.openSettings(index);
+              },
+              onTags: () => {
+                this.openTags(index);
+              },
+              onDelete: () => {
+                this.askDeleteCurve(index);
               }
             })
-          }, (item: CurveData) => item.title)
+            //键里带版本号：内容变了必须重建卡片，否则缩略图不刷新（见 listRevision 的注释）
+          }, (item: CurveData) => item.title + '#' + this.listRevision.toString())
 
         Button(){
           SymbolGlyph($r('sys.symbol.plus'))
@@ -422,17 +602,82 @@ export struct CurveList {
     });
   }
 
-  /** 设置图标：进曲线编辑页 */
-  private openSettings(title: string): void {
-    console.info('打开曲线设置：' + title);
-    this.navPathStack.pushPathByName('CurveEdit_Page', null, true);
+  /**
+   * 设置图标：进曲线编辑页，把这条曲线在列表里的序号带过去
+   *
+   * 这里**不注册** pushPathByName 的 onPop 回调：刷新的唯一入口是 CurveStore 的写盘通知
+   * （见 storeRevision）。两条路都留着的话，保存一次会刷两遍。
+   */
+  private openSettings(index: number): void {
+    if (index < 0 || index >= this.CURVES.length) {
+      return;
+    }
+    const param: CurveEditParam = { index: index };
+    this.navPathStack.pushPathByName('CurveEdit_Page', param, true);
+  }
+
+  /** 标签图标：进标签编辑页，同样带上序号（标签存在同一个 json 里） */
+  private openTags(index: number): void {
+    if (index < 0 || index >= this.CURVES.length) {
+      return;
+    }
+    const param: CurveEditParam = { index: index };
+    this.navPathStack.pushPathByName('TagEdit_Page', param, true);
+  }
+
+  /** 垃圾桶：删曲线之前先确认 */
+  private askDeleteCurve(index: number): void {
+    if (index < 0 || index >= this.CURVES.length) {
+      return;
+    }
+    const curve: CurveData = this.CURVES[index];
+    this.getUIContext().showAlertDialog({
+      title: '删除这条曲线？',
+      message: '「' + curve.title + '」删除后不能恢复',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        action: () => {
+          this.deleteCurve(index);
+        }
+      }
+    });
+  }
+
+  /**
+   * 删除曲线：删掉对应的 json，并把后面的文件改名上前一位
+   * （文件名就是序号，必须靠 deleteAt 里的重排维持这个约定）
+   */
+  private deleteCurve(index: number): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (ctx !== undefined && ctx !== null) {
+      deleteAt(ctx, index);
+    }
+    if (this.selectedIndex === index + 1) {
+      this.selectedIndex = 0; //选中的正好是被删的，退回"恒定BPM"
+    } else if (this.selectedIndex > index + 1) {
+      this.selectedIndex = this.selectedIndex - 1;
+    }
+    this.reloadCurves();
   }
 
 
+  /** 加号：新建一条曲线（写成 (n+1).json），默认 30 分钟、120 BPM 的直线 */
   private makeContent(): void {
-    let selected: number = getRandomInt(0,2);
-    this.CURVES.push(new CurveData('自定义曲线', COLOR_PLAN[selected][0], COLOR_PLAN[selected][1],
-      [0.82, 0.74, 0.66, 0.58, 0.48, 0.40, 0.30, 0.22]),)
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (ctx === undefined || ctx === null) {
+      return;
+    }
+    const n: number = count(ctx);
+    const file: CurveFile = emptyCurve('曲线' + (n + 1).toString(), 30);
+    if (appendCurve(ctx, file) >= 0) {
+      this.reloadCurves();
+    }
   }
 
 
