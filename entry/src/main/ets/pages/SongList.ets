@@ -175,6 +175,8 @@ export struct SongList {
   @State selectedIndexes: number[] = [];
   /** 上拉面板是否展开 */
   @State isSheetShow: boolean = false;
+  PAGE_BG: string = '#F5F6F8';
+
 
   build() {
       Stack({ alignContent: Alignment.Bottom }) {
@@ -215,6 +217,8 @@ export struct SongList {
       }
       .width('100%')
       .height('100%')
+      .backgroundColor(this.PAGE_BG)
+
       .bindSheet(this.isSheetShow, this.PlaylistSheet, {
         detents: [SheetSize.MEDIUM, SheetSize.LARGE], //半屏起，可以往上拉成全屏
         dragBar: true,

@@ -27,6 +27,7 @@ const CARD_BG: string = '#FFFFFF';
 const FIELD_BG: string = '#F2F3F7';
 const DIVIDER_COLOR: string = '#F0F0F0';
 
+
 /** 图标配色 */
 const COLOR_TEAL: string = '#4ECDC4';
 const COLOR_ORANGE: string = '#FF8E53';
@@ -94,6 +95,7 @@ struct AlgorithmSettings {
     .onReady((context: NavDestinationContext) => {
       this.navPathStack = context.pathStack;
     })
+    .background(PAGE_BG)
   }
 
   // ==================== 大卡片：变速算法选择 ====================

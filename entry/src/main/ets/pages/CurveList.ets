@@ -1,4 +1,7 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
+import { common } from '@kit.AbilityKit';
+import { fileIo } from '@kit.CoreFileKit';
+
 /**
  * 曲线列表页
  *
@@ -30,14 +33,14 @@ class CurveData {
 }
 
 /** 演示数据：三个曲线项 */
-const DEMO_CURVES: CurveData[] = [
-  new CurveData('渐进加速', '#FF6B6B', 'rgba(255,107,107,0.14)',
-    [0.82, 0.74, 0.66, 0.58, 0.48, 0.40, 0.30, 0.22]),
-  new CurveData('波浪起伏', '#4ECDC4', 'rgba(78,205,196,0.14)',
-    [0.52, 0.30, 0.58, 0.28, 0.62, 0.34, 0.54, 0.32]),
-  new CurveData('阶梯爬升', '#A78BFA', 'rgba(167,139,250,0.14)',
-    [0.86, 0.86, 0.64, 0.64, 0.42, 0.42, 0.24, 0.24]),
-];
+
+
+const COLOR_PLAN:string[][] = [          //配色方案
+  ['#FF6B6B', 'rgba(255,107,107,0.14)'],
+  ['#4ECDC4', 'rgba(78,205,196,0.14)'],
+  ['#A78BFA', 'rgba(167,139,250,0.14)']
+]
+
 
 /** 卡片视觉常量 */
 const CARD_RADIUS: number = 18;   // 圆角
@@ -68,6 +71,7 @@ struct CurvePreview {
   points: number[] = [];
   lineColor: string = CARD_ACCENT;
   fillColor: string = 'rgba(255,107,107,0.14)';
+
 
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
@@ -153,6 +157,8 @@ struct CurveCard {
   dialogComponentId?: number;
   @State inputValue: string = '';       // 通过 @Link 双向同步到父组件
   @State realBPM: string = '';
+
+
 
   // 静态数据
   title: string = '';
@@ -317,9 +323,20 @@ export struct CurveList {
   @State navPathStack: NavPathStack = new NavPathStack();
   /** 当前选中的项：0 = 恒定BPM，1..n 对应 DEMO_CURVES 的下标 + 1 */
   @State selectedIndex: number = 0;
+  PAGE_BG: string = '#F5F6F8';
+  @State CURVES: CurveData[] = [
+    new CurveData('渐进加速', '#FF6B6B', 'rgba(255,107,107,0.14)',
+      [0.82, 0.74, 0.66, 0.58, 0.48, 0.40, 0.30, 0.22]),
+    new CurveData('波浪起伏', '#4ECDC4', 'rgba(78,205,196,0.14)',
+      [0.52, 0.30, 0.58, 0.28, 0.62, 0.34, 0.54, 0.32]),
+    new CurveData('阶梯爬升', '#A78BFA', 'rgba(167,139,250,0.14)',
+      [0.86, 0.86, 0.64, 0.64, 0.42, 0.42, 0.24, 0.24]),
+  ];
+
 
 
   build() {
+
       Scroll() {
         Column({ space: CARD_SPACE }) {
           // 第一项固定是"恒定BPM"，只有一行字
@@ -336,7 +353,7 @@ export struct CurveList {
             }
           })
 
-          ForEach(DEMO_CURVES, (item: CurveData, index: number) => {
+          ForEach(this.CURVES, (item: CurveData, index: number) => {
             CurveCard({
               title: item.title,
               points: item.points,
@@ -352,6 +369,21 @@ export struct CurveList {
               }
             })
           }, (item: CurveData) => item.title)
+
+        Button(){
+          SymbolGlyph($r('sys.symbol.plus'))
+            .fontSize(20)
+            .fontColor([Color.Black])
+            .padding({ bottom: 10 })
+            .offset({y:5})
+        }.width(50).height(50)
+          .borderRadius("100%").backgroundColor(Color.Grey).opacity(0.2)
+        .onClick(()=> {
+            this.makeContent();
+          })
+
+          Blank().height(80).width("100%");
+
         }
         .width('100%')
         .padding({
@@ -360,9 +392,12 @@ export struct CurveList {
           top: 16,
           bottom: 32
         })
+
+
       }
       .width('100%')
       .height('100%')
+      .backgroundColor(this.PAGE_BG)
       .align(Alignment.Top)
       .scrollBar(BarState.Off)
       // HdsNavDestination 的标题栏是悬浮在内容之上的：这里让出标题栏的高度，
@@ -392,7 +427,36 @@ export struct CurveList {
     console.info('打开曲线设置：' + title);
     this.navPathStack.pushPathByName('CurveEdit_Page', null, true);
   }
+
+
+  private makeContent(): void {
+    let selected: number = getRandomInt(0,2);
+    this.CURVES.push(new CurveData('自定义曲线', COLOR_PLAN[selected][0], COLOR_PLAN[selected][1],
+      [0.82, 0.74, 0.66, 0.58, 0.48, 0.40, 0.30, 0.22]),)
+  }
+
+
+  async saveCurve(ctx: common.UIAbilityContext, curve: CurveData): Promise<string>{
+      const name = curve.title;
+      const filesDir = ctx.filesDir; //获取文件地址
+      const destPath = `${filesDir}/Curves`;
+
+      let content = fileIo.readText(destPath).catch(() => {
+
+      });
+
+    return "";
+  }
+
+
 }
+
+function getRandomInt(min: number, max: number): number {
+  min = Math.ceil(min);
+  max = Math.floor(max);
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
 
 @Builder
 export function load() {

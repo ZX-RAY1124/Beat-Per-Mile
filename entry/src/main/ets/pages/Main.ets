@@ -53,6 +53,8 @@ struct Main {
   @State title_name: string = '';
   CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
   CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
+  PAGE_BG: string = '#F5F6F8';
+
 
   @State Button_1 : Center_Button = new Center_Button(1)
   @State Button_2 : Center_Button = new Center_Button(2)
@@ -81,6 +83,7 @@ struct Main {
     }.height(120).width(100).borderRadius(20)
     .justifyContent(FlexAlign.Center)
     .borderColor(this.colorList[index])
+    .backgroundColor(Color.White)
     .borderWidth({
       left:this.CARD_BORDER_OTHER,
       right:this.CARD_BORDER_OTHER,
@@ -220,6 +223,8 @@ struct Main {
 
 
                 Column() { //第一个按钮
+
+                  /*
                   Column()
                     .width(40)
                     .height(40)
@@ -227,7 +232,7 @@ struct Main {
                     .offset({ x: this.Button_1.animator.x, y: -this.Button_1.animator.y })
                     .onClick(() => {
                       console.log(this.windowWidth.toString()) //test
-                    })
+                    })*/
 
 
                 }
@@ -240,8 +245,11 @@ struct Main {
                 .renderGroup(true)
                 .onClick(() => {
 
+                  this.navPathStack.pushPathByName("Player_Page",null);
+
                  // this.navPathStack.pushPathByName('Player_Page', null, true);
 
+/*
                   this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
                     this.Button_selected_id = 1;
 
@@ -255,9 +263,10 @@ struct Main {
                     }
 
 
+
                   })
 
-
+*/
                 })
 
 
@@ -265,6 +274,8 @@ struct Main {
 
 
                 Column() { //第二个按钮
+
+                  /*
                   Column()
                     .width(40)
                     .height(40)
@@ -273,6 +284,7 @@ struct Main {
                     .onClick(() => {
 
                     })
+                    * */
 
 
                 }
@@ -285,6 +297,9 @@ struct Main {
                 .renderGroup(true)
                 .onClick(() => {
 
+                  this.navPathStack.pushPathByName("Player_Page",null);
+
+                  /*
                   this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
                     this.Button_selected_id = 2;
 
@@ -298,7 +313,7 @@ struct Main {
                     }
 
                   })
-
+*/
 
                 })
 
@@ -425,6 +440,8 @@ struct Main {
 
     }.width('100%')
     .height('100%')
+    .backgroundColor(this.PAGE_BG)
+
     .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     .backgroundBlurStyle(BlurStyle.NONE)
 
