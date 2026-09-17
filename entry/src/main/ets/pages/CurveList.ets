@@ -681,18 +681,6 @@ export struct CurveList {
   }
 
 
-  async saveCurve(ctx: common.UIAbilityContext, curve: CurveData): Promise<string>{
-      const name = curve.title;
-      const filesDir = ctx.filesDir; //获取文件地址
-      const destPath = `${filesDir}/Curves`;
-
-      let content = fileIo.readText(destPath).catch(() => {
-
-      });
-
-    return "";
-  }
-
 
 }
 

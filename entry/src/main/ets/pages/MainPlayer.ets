@@ -1,0 +1,80 @@
+import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
+
+
+@Component
+struct MainPlayer {
+  @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
+  @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',0, '次数'),
+    new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
+    new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
+  @State navPathStack :NavPathStack = new NavPathStack();
+  @State Status:string[] = ["正在运动","暂停","加速中","减速中"]
+
+
+  CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
+  CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
+  PAGE_BG: string = '#F5F6F8';
+
+  @Builder
+  Column_UP(index:number){
+    Column(){
+      SymbolGlyph($r(this.columnList[index].icon))
+        .fontSize(30)
+        .fontColor([this.colorList[index]])
+        .padding({ bottom: 10 });
+      Row(){
+        Text(this.columnList[index].statistic.toString()).fontWeight(FontWeight.Medium).fontSize(25)
+        Text(this.columnList[index].per).fontColor('#ff646161').fontSize(10).alignSelf(ItemAlign.Baseline)
+      }
+      Text(this.columnList[index].name).fontColor('#ff646161').fontSize(10)
+
+    }.height(120).width(100).borderRadius(20)
+    .justifyContent(FlexAlign.Center)
+    .borderColor(this.colorList[index])
+    .backgroundColor(Color.White)
+    .borderWidth({
+      left:this.CARD_BORDER_OTHER,
+      right:this.CARD_BORDER_OTHER,
+      top:this.CARD_BORDER_TOP,
+      bottom:this.CARD_BORDER_OTHER
+    })
+    .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
+    .margin(5);
+  }
+
+
+  build(){
+    HdsNavDestination(){
+      Row({space:10}) { //标题三栏
+        this.Column_UP(0);
+        this.Column_UP(1);
+        this.Column_UP(2);
+      }.width("100%").justifyContent(FlexAlign.Center).padding({ top: $r('sys.float.single_line_titlebar_height') })
+    }.width("100%")
+    .height("100%")
+    .onReady((context: NavDestinationContext) => {
+      this.navPathStack = context.pathStack;
+    })
+    .titleBar({content:{title:{mainTitle:this.Status[0],mainTitleSize:20}}})
+  }
+}
+
+class topColumnMaker{
+  icon:string = '';
+  per:string = '';
+  statistic:number = 0;
+  name:string = '';
+  constructor(icon:string, per:string ,statistic: number,name:string) {
+    this.icon = icon;
+    this.per = per;
+    this.statistic = statistic;
+    this.name = name;
+  }
+
+}
+
+
+@Builder
+export function load(){
+  MainPlayer();
+}

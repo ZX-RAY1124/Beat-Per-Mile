@@ -11,6 +11,11 @@
       "buildFunction": "load"
     },
     {
+      "name": "Playlist_Page",
+      "pageSourceFile": "src/main/ets/pages/Playlist.ets",
+      "buildFunction": "load"
+    },
+    {
       "name": "SongList_Page",
       "pageSourceFile": "src/main/ets/pages/SongList.ets",
       "buildFunction": "load"
@@ -43,6 +48,11 @@
     {
       "name": "Audio_test_page",
       "pageSourceFile": "src/main/ets/pages/audio_play_test.ets",
+      "buildFunction": "load"
+    },
+    {
+      "name": "Main_Play_Page",
+      "pageSourceFile": "src/main/ets/pages/MainPlayer.ets",
       "buildFunction": "load"
     }
   ]

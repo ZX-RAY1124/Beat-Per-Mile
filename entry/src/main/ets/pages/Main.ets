@@ -1,5 +1,5 @@
 import { Center_Button } from '../ets_libs/Button';
-import { curves, EllipseShape, LengthMetrics } from '@kit.ArkUI';
+import { curves, EllipseShape, LengthMetrics, promptAction } from '@kit.ArkUI';
 import { window } from '@kit.ArkUI';
 import {
   hdsMaterial,
@@ -8,6 +8,7 @@ import {
   HdsNavigationTitleMode,
   HdsTabsController,
   ScrollEffectType,
+  HdsNavigationAttribute,
 } from '@kit.UIDesignKit';
 
 import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
@@ -17,6 +18,8 @@ import * as entry from 'libentry.so';
 import { SongList } from './SongList';
 import { CurveList } from './CurveList';
 import { Settings } from './Settings';
+import { UIAbility } from '@kit.AbilityKit';
+import { Playlist } from './Playlist';
 
 console.log('模块对象='+JSON.stringify(entry));
 console.log('模块对象是否为undefined = ' + (entry === undefined));
@@ -41,6 +44,7 @@ class topColumnMaker{
 @Component
 struct Main {
 
+
   @State g_Visibility: boolean = true;                   //全局显示、隐藏
   @State navPathStack: NavPathStack = new NavPathStack();
   @State selected_id: number = 0;
@@ -60,11 +64,27 @@ struct Main {
   @State Button_2 : Center_Button = new Center_Button(2)
   @State pageName: string = "今日统计";
 
-  @State page_name_list : string[] = ["今日统计","歌曲列表","曲线选择","设置"];
+  @State page_name_list : string[] = ["今日统计","歌单列表","曲线选择","设置"];
   @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
   @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',0, '次数'),
     new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
     new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
+
+
+
+  @Builder
+  MyMenu() {
+    Menu() {
+      MenuItem({ content: '编辑', startIcon: $r('sys.symbol.plus') })
+        .onClick(() => { this.isMenuShow = false; promptAction.showToast({ message: '编辑' }); })
+      MenuItem({ content: '删除', startIcon: $r('sys.symbol.plus') })
+        .onClick(() => { this.isMenuShow = false; promptAction.showToast({ message: '删除' }); })
+      MenuItem({ content: '分享', startIcon: $r('sys.symbol.plus') })
+        .onClick(() => { this.isMenuShow = false; promptAction.showToast({ message: '分享' }); })
+    }
+    .radius(12) // 菜单圆角
+  }
+
 
 
   @Builder
@@ -173,6 +193,50 @@ struct Main {
       console.error('出现异常' + JSON.stringify(exception))
     }
   }
+  @State menuX: number = 0;
+  @State menuY: number = 0;
+  @State showMenu: boolean = false;
+  dialogComponentId?:number;
+
+  private showSongMenu() {
+    try {
+      const promptAction = this.getUIContext().getPromptAction();
+      promptAction.openCustomDialog({
+        builder: () => {
+
+        },
+        autoCancel: false,
+
+
+      }).then((dialogId: number) => {
+        this.dialogComponentId = dialogId;
+      }).catch((error: BusinessError) => {
+
+      });
+    } catch (error){
+
+    }
+  }
+  private column_list: string[][] = [
+    ["","从本地导入歌曲"],
+    ["", "新建歌单"],
+    ["", "从第三方服务器载入歌曲"]
+  ]
+  @Builder songSelectionMenu(){
+    Text("请选择菜单")
+    Column(){
+      ForEach(this.column_list, (item: string[]) => {
+        Column(){
+
+        }
+        Row(){
+
+        }
+      })
+
+
+    }
+  }
 
 
   build() {
@@ -251,7 +315,7 @@ struct Main {
                 .renderGroup(true)
                 .onClick(() => {
 
-                  this.navPathStack.pushPathByName("Player_Page",null);
+                  this.navPathStack.pushPathByName("Main_Play_Page",null, true);
 
                  // this.navPathStack.pushPathByName('Player_Page', null, true);
 
@@ -399,8 +463,8 @@ struct Main {
 
 
         TabContent(){
-          SongList();
-        }.tabBar(this.tabBarBuilder("sys.symbol.music_fill","歌曲列表", 1))
+          Playlist({navPathStack:this.navPathStack});
+        }.tabBar(this.tabBarBuilder("sys.symbol.music_fill","歌单列表", 1))
 
 
         // 注意：HdsTabs 的直接子节点必须全部是 TabContent。
@@ -444,15 +508,28 @@ struct Main {
         })
       })
 
+
+
     }.width('100%')
     .height('100%')
     .backgroundColor(this.PAGE_BG)
 
     .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     .backgroundBlurStyle(BlurStyle.NONE)
+    .toolbar()
 
 
-    .titleBar({content:{title:{mainTitle:this.pageName,mainTitleSize:20}},style : {
+
+    .titleBar({content:{title:{mainTitle:this.pageName,mainTitleSize:20},
+      menu:{
+        maxCount:3,
+        value:[{content:{icon:$r("sys.symbol.plus"),label:"更多",componentId:"menu",action:()=>{
+
+
+
+        }}, badge:{}}]
+      }
+    },style : {
       scrollEffectOpts: {
       enableScrollEffect: true,
       scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
