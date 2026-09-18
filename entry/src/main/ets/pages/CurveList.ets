@@ -329,7 +329,6 @@ struct CurveCard {
 
 
 
-
   build() {
     Column({ space: 10 }) {
       if (this.points.length >= 2) {
@@ -409,6 +408,14 @@ struct CurveCard {
 @Component
 export struct CurveList {
   @State navPathStack: NavPathStack = new NavPathStack();
+  @Link @Watch ('onColumnAdd') triggerFlag: boolean   //父组件外部触发器
+
+  onColumnAdd(){
+    if(this.triggerFlag){
+      this.makeContent();
+    }
+  }
+
   /** 当前选中的项：0 = 恒定BPM，1..n 对应 CURVES 的下标 + 1 */
   @State selectedIndex: number = 0;
   /**
@@ -693,5 +700,5 @@ function getRandomInt(min: number, max: number): number {
 
 @Builder
 export function load() {
-  CurveList()
+
 }

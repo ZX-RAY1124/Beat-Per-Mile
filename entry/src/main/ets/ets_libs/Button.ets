@@ -6,6 +6,7 @@ interface Button{
   button_zoom_x:number,
   button_zoom_y:number,
   is_select: boolean,
+  can_select: boolean,
   animator: Ellipse_animation
 }
 
@@ -16,6 +17,7 @@ export class Center_Button implements Button{
   button_zoom_x: number = 1;
   button_zoom_y: number = 1;
   is_select: boolean = false;
+  can_select: boolean = true;
   animator: Ellipse_animation = new Ellipse_animation(100,50);
   constructor(index:number) {
     this.index = index;
@@ -24,19 +26,23 @@ export class Center_Button implements Button{
 
 
   select() : void {
-    this.is_select = true;
-    this.offset_y = 1000;
-    this.button_zoom_x = 8;
-    this.button_zoom_y = 8;
-    this.animator.onPlay()
+    if(this.can_select) {
+      this.is_select = true;
+      this.offset_y = 1100;
+      this.button_zoom_x = 8;
+      this.button_zoom_y = 8;
+      this.animator.onPlay()
+    }
   }
 
   unselect(): void {
-    this.is_select = false;
-    this.offset_y = 0;
-    this.button_zoom_x = 1;
-    this.button_zoom_y = 1;
-    this.animator.onPause()
+    if(this.can_select) {
+      this.is_select = false;
+      this.offset_y = 0;
+      this.button_zoom_x = 1;
+      this.button_zoom_y = 1;
+      this.animator.onPause()
+    }
   }
 
   get_selection() : boolean{

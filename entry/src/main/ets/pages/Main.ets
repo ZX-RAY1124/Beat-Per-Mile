@@ -15,10 +15,8 @@ import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
 
 import lottie, { AnimationItem } from '@ohos/lottie';
 import * as entry from 'libentry.so';
-import { SongList } from './SongList';
 import { CurveList } from './CurveList';
 import { Settings } from './Settings';
-import { UIAbility } from '@kit.AbilityKit';
 import { Playlist } from './Playlist';
 
 console.log('模块对象='+JSON.stringify(entry));
@@ -68,7 +66,10 @@ struct Main {
   @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
   @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',0, '次数'),
     new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
-    new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
+    new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')];
+
+  @State Curves_make_sure: boolean = false  // 触发器状态
+
 
 
 
@@ -217,24 +218,107 @@ struct Main {
 
     }
   }
+
+
+  private CARD_ACCENT: string = '#FF6B6B'; // 恒定BPM 用的描边色
   private column_list: string[][] = [
-    ["","从本地导入歌曲"],
-    ["", "新建歌单"],
-    ["", "从第三方服务器载入歌曲"]
+    ["sys.symbol.arrow_right_up_and_square","从本地导入歌曲","现在开始，随心出发","#FF6B6B","0"],
+    ["sys.symbol.arrow_right_up_and_square", "新建歌单","创建你的个人频率","#4ECDC4","1" ],
+    ["sys.symbol.arrow_right_up_and_square", "从第三方服务器载入歌曲","带来你爱听的一切","#A78BFA","2"]
   ]
+
+  private menu_func(index:string){
+    if(index === "0"){
+
+    }if(index === "1"){
+      this.Curves_make_sure = !this.Curves_make_sure;
+    }if(index === "2") {
+
+    }
+    this.Curves_make_sure = !this.Curves_make_sure;
+
+    this.close_Menu();
+
+  }
+  /** 新建歌单，新建曲线选择框*/
   @Builder songSelectionMenu(){
-    Text("请选择菜单")
-    Column(){
+    Column({space:20}){
+      Text("请选择菜单").padding({top:20}).fontSize(22).fontWeight(FontWeight.Bold)
+
       ForEach(this.column_list, (item: string[]) => {
         Column(){
+          Row(){
+            Stack() {
+              SymbolGlyph($r(item[0]))
+                .fontSize(25)
+                .fontColor([Color.White])
+            }.width(50).height(50).backgroundColor(item[3] )
+            .borderRadius(10)
 
-        }
-        Row(){
+            Column(){
+              Text(item[1]).fontSize(15)
+              Text(item[2]).fontSize(10)
+            }.alignItems(HorizontalAlign.Start).padding({left:15})
 
-        }
+          }.justifyContent(FlexAlign.Start).offset({left:20 })
+
+        }.width("80%")
+        .height("10%")
+        .shadow({ radius: 18, color: '#26000000', offsetX: 0, offsetY: 6 })
+        .borderRadius(20)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Start)
+        .borderWidth({
+          left:this.CARD_BORDER_OTHER,
+          right:this.CARD_BORDER_TOP,
+          top:this.CARD_BORDER_OTHER,
+          bottom:this.CARD_BORDER_OTHER
+        }).borderColor(item[3])
+        .onClick(() => {
+          this.menu_func(item[4])
+        })
+
+
+
       })
+      Row(){
+        Button("取消").width('80%').height(40).onClick(() => {
+          this.close_Menu();
+        }).backgroundColor(this.CARD_ACCENT);
+      }.padding({bottom:20})
 
 
+    }.justifyContent(FlexAlign.Center)
+  }
+
+  show_Menu(){
+    try {
+      const promptAction = this.getUIContext().getPromptAction();
+      promptAction.openCustomDialog({
+        builder: () => {
+          this.songSelectionMenu();
+        },
+        autoCancel : false,
+
+      }).then((dialogId: number) => {
+        this.dialogComponentId = dialogId;
+      })
+        .catch((error: BusinessError) => {
+
+        });
+    } catch (error){
+
+    }
+  }
+  close_Menu() {
+    if(this.dialogComponentId) {
+      try{
+        this.getUIContext().getPromptAction().closeCustomDialog(this.dialogComponentId);
+        this.dialogComponentId = undefined;
+
+      } catch (error){
+        //先不处理
+      }
     }
   }
 
@@ -243,25 +327,21 @@ struct Main {
     HdsNavDestination() {
       HdsTabs({ index: this.selected_id }) {
         TabContent() {
-          RelativeContainer() {
+         Column() {
 
             Row({space:10}) { //标题三栏
               this.Column_UP(0);
               this.Column_UP(1);
               this.Column_UP(2);
-            }.alignRules(
-              {
-                'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
-                'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start},
-              }
-            )
-            .offset({x:13})
+            }
+
 
 
 
 
 
             Column() {
+              /*
               Row() {
                 Button("测试Lottie动画").height(40).width(120).onClick(() => { //测试用，记得删掉
                   this.navPathStack.pushPathByName('Animation_test_Page', null, true)
@@ -273,6 +353,7 @@ struct Main {
                   console.info('ButtonType.Normal');
                 }).offset({ y: -160 })
               }
+              * */
 
               Text('主屏幕')
                 .fontSize(28)
@@ -315,11 +396,11 @@ struct Main {
                 .renderGroup(true)
                 .onClick(() => {
 
-                  this.navPathStack.pushPathByName("Main_Play_Page",null, true);
+
 
                  // this.navPathStack.pushPathByName('Player_Page', null, true);
 
-/*
+
                   this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
                     this.Button_selected_id = 1;
 
@@ -331,12 +412,13 @@ struct Main {
                       this.Button_1.select();
                       this.Button_2.unselect();
                     }
-
-
+                    this.navPathStack.pushPathByName("Main_Play_Page",this.windowWidth,() => {
+                      this.Button_1.unselect();
+                    }, true);
 
                   })
 
-*/
+
                 })
 
 
@@ -353,7 +435,7 @@ struct Main {
                     .offset({ x: this.Button_2.animator.x, y: -this.Button_2.animator.y })
                     .onClick(() => {
 
-                    })
+                    })0
                     * */
 
 
@@ -393,10 +475,10 @@ struct Main {
               }
               .alignSelf(ItemAlign.Baseline)
               .padding({ top: 20 })
-              .position({ x: this.gesture_offset, y: "30%" })
+              .position({ x: this.gesture_offset, y: "15%" })
               .width(4000)
               .height('32%')
-              .backgroundColor(Color.Pink)
+              //.backgroundColor(Color.Pink)
 
               .gesture(PanGesture({ direction: PanDirection.Horizontal })
                 .onActionUpdate((event: GestureEvent) => {
@@ -472,7 +554,7 @@ struct Main {
         // 导致后面 TabContent 的索引整体后移一位：点"设置"实际显示的是空的"曲线选择"，
         // 点"曲线选择"实际显示的是曲线列表。页面组件一律写进 TabContent 里面。
         TabContent(){
-          CurveList({navPathStack: this.navPathStack});
+           CurveList({navPathStack: this.navPathStack, triggerFlag: this.Curves_make_sure });
         }.tabBar(this.tabBarBuilder("sys.symbol.indent_right","曲线选择", 2))
 
 
@@ -524,7 +606,8 @@ struct Main {
       menu:{
         maxCount:3,
         value:[{content:{icon:$r("sys.symbol.plus"),label:"更多",componentId:"menu",action:()=>{
-
+          this.show_Menu()
+          ;
 
 
         }}, badge:{}}]

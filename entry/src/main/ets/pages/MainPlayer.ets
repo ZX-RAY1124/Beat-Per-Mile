@@ -1,5 +1,6 @@
 import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
-
+import { Center_Button } from '../ets_libs/Button';
+import { EllipseShape } from '@kit.ArkUI';
 
 @Component
 struct MainPlayer {
@@ -9,6 +10,17 @@ struct MainPlayer {
     new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
   @State navPathStack :NavPathStack = new NavPathStack();
   @State Status:string[] = ["正在运动","暂停","加速中","减速中"]
+  @State Button_1 : Center_Button = new Center_Button(1)
+  @State WINDOWS_WID : number = 0;
+  @Provide transition_type : NavigationSystemTransitionType =
+    NavigationSystemTransitionType.EXPLODE;
+
+
+
+
+
+
+
 
 
   CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
@@ -49,12 +61,59 @@ struct MainPlayer {
         this.Column_UP(0);
         this.Column_UP(1);
         this.Column_UP(2);
-      }.width("100%").justifyContent(FlexAlign.Center).padding({ top: $r('sys.float.single_line_titlebar_height') })
+      }
+      .width("100%").justifyContent(FlexAlign.Center).padding({ top: $r('sys.float.single_line_titlebar_height') })
+      Column() {
+        Column() {
+          Column() {
+
+          }
+          .backgroundColor(Color.Blue)
+          .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+          .height(240)
+          .width(240)
+          .scale({ x: this.Button_1.button_zoom_x, y: this.Button_1.button_zoom_y })
+          .offset({ y: this.Button_1.offset_y })
+          .onClick(() => {
+
+          })
+          .renderGroup(true)
+
+        }.position({ x: (this.WINDOWS_WID / 2) - 120, y: "15%" })
+        .height("35%")
+    }.width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+
+
+
+
     }.width("100%")
     .height("100%")
+    .systemTransition(this.transition_type)
+    .backgroundColor(this.PAGE_BG)
+    .onBackPressed(() => {
+      this.getUIContext().animateTo({curve: Curve.EaseInOut, duration:500},() => {
+        this.Button_1.unselect();
+        this.navPathStack.pop({})
+      })
+      return true;
+    })
+
     .onReady((context: NavDestinationContext) => {
       this.navPathStack = context.pathStack;
+      this.WINDOWS_WID = context.pathInfo.param as number;
+
     })
+
+    .onActive(() => {
+      this.getUIContext().animateTo({curve: Curve.EaseInOut, duration: 500}, () => {
+          this.Button_1.select();
+      })
+
+    })
+
     .titleBar({content:{title:{mainTitle:this.Status[0],mainTitleSize:20}}})
   }
 }
