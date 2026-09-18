@@ -176,7 +176,7 @@ struct Player {
           .borderRadius(ALBUM_RADIUS)
           .justifyContent(FlexAlign.Center)
           .alignItems(HorizontalAlign.Center)
-          .linearGradient({
+          .linearGradient({           //渐变
             angle: 145,
             colors: [[ '#FF6B6B', 0.0 ], [ '#A78BFA', 1.0 ]]
           })

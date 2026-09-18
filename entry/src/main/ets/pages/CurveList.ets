@@ -557,17 +557,6 @@ export struct CurveList {
             //键里带版本号：内容变了必须重建卡片，否则缩略图不刷新（见 listRevision 的注释）
           }, (item: CurveData) => item.title + '#' + this.listRevision.toString())
 
-        Button(){
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(20)
-            .fontColor([Color.Black])
-            .padding({ bottom: 10 })
-            .offset({y:5})
-        }.width(50).height(50)
-          .borderRadius("100%").backgroundColor(Color.Grey).opacity(0.2)
-        .onClick(()=> {
-            this.makeContent();
-          })
 
           Blank().height(80).width("100%");
 

@@ -11,16 +11,10 @@ struct MainPlayer {
   @State navPathStack :NavPathStack = new NavPathStack();
   @State Status:string[] = ["正在运动","暂停","加速中","减速中"]
   @State Button_1 : Center_Button = new Center_Button(1)
+  @State outCircle: Center_Button = new Center_Button(2)
   @State WINDOWS_WID : number = 0;
   @Provide transition_type : NavigationSystemTransitionType =
     NavigationSystemTransitionType.EXPLODE;
-
-
-
-
-
-
-
 
 
   CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
@@ -64,6 +58,44 @@ struct MainPlayer {
       }
       .width("100%").justifyContent(FlexAlign.Center).padding({ top: $r('sys.float.single_line_titlebar_height') })
       Column() {
+
+        Stack(){
+          Column() {
+
+          }.shadow({
+            // 范围跟滑块走；两个都是**静态属性**，改完下一帧生效，不经过动画
+            radius: 20,
+            color: '#FF6B6B',
+            offsetX: 0,
+            offsetY: 0
+          })
+          .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+          .height(240)
+          .width(240)
+          .scale({ x: this.outCircle.button_zoom_x + 0.05, y: this.outCircle.button_zoom_y + 0.05})
+          .offset({ y: this.outCircle.offset_y })
+          .onClick(() => {
+
+          })
+          .renderGroup(true)
+
+
+          Column() {
+
+          }
+          .backgroundColor(Color.Orange)
+          .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+          .height(240)
+          .width(240)
+          .scale({ x: this.outCircle.button_zoom_x + 0.05, y: this.outCircle.button_zoom_y + 0.05})
+          .offset({ y: this.outCircle.offset_y })
+          .onClick(() => {
+
+          })
+          .renderGroup(true)
+        }.position({ x: (this.WINDOWS_WID / 2) - 120, y: "15%" })
+
+
         Column() {
           Column() {
 
@@ -79,8 +111,12 @@ struct MainPlayer {
           })
           .renderGroup(true)
 
+
+
         }.position({ x: (this.WINDOWS_WID / 2) - 120, y: "15%" })
-        .height("35%")
+
+
+
     }.width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
@@ -104,6 +140,8 @@ struct MainPlayer {
     .onReady((context: NavDestinationContext) => {
       this.navPathStack = context.pathStack;
       this.WINDOWS_WID = context.pathInfo.param as number;
+      this.outCircle.select();
+
 
     })
 
@@ -111,7 +149,6 @@ struct MainPlayer {
       this.getUIContext().animateTo({curve: Curve.EaseInOut, duration: 500}, () => {
           this.Button_1.select();
       })
-
     })
 
     .titleBar({content:{title:{mainTitle:this.Status[0],mainTitleSize:20}}})

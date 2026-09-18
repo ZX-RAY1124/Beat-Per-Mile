@@ -222,16 +222,16 @@ struct Main {
 
   private CARD_ACCENT: string = '#FF6B6B'; // 恒定BPM 用的描边色
   private column_list: string[][] = [
-    ["sys.symbol.arrow_right_up_and_square","从本地导入歌曲","现在开始，随心出发","#FF6B6B","0"],
+    ["sys.symbol.arrow_right_up_and_square","新建曲线","现在开始，随心出发","#FF6B6B","0"],
     ["sys.symbol.arrow_right_up_and_square", "新建歌单","创建你的个人频率","#4ECDC4","1" ],
     ["sys.symbol.arrow_right_up_and_square", "从第三方服务器载入歌曲","带来你爱听的一切","#A78BFA","2"]
   ]
 
   private menu_func(index:string){
     if(index === "0"){
-
-    }if(index === "1"){
       this.Curves_make_sure = !this.Curves_make_sure;
+    }if(index === "1"){
+
     }if(index === "2") {
 
     }
