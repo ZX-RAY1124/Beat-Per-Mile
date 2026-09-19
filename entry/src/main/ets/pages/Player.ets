@@ -153,7 +153,7 @@ struct Player {
             .width(ALBUM_SIZE)
             .height(ALBUM_SIZE)
             .borderRadius(ALBUM_RADIUS)
-            .backgroundColor(ACCENT) //只用来"投出"阴影，本身被封面挡住
+            .backgroundColor(ACCENT) //只用来"投出"阴影，本dd身被封面挡住
             .shadow({
               // 范围跟滑块走；两个都是**静态属性**，改完下一帧生效，不经过动画
               radius: this.glowRadius,

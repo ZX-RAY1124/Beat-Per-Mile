@@ -1,4 +1,7 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
+import { appendSongList, SongListJSON } from '../ets_libs/PlayListStore';
+import { SongList } from './SongList';
+import { common } from '@kit.AbilityKit';
 
 /**
  * 歌单列表页
@@ -192,6 +195,16 @@ export struct Playlist {
     });
   }
 
+
+  @Link @Watch ('MakePlayListItem') triggerFlag: boolean;
+
+  MakePlayListItem(){
+    if(this.triggerFlag){
+      let index: number = Math.floor((Math.random()*3))
+      this.PLAYLISTS.push( new PlaylistData('新建歌单', COLOR_PLAN[index][0], 20, COLOR_PLAN[index][1]))
+    }
+  }
+
   build() {
     Scroll() {
       Column({ space: CARD_SPACE }) {
@@ -210,9 +223,12 @@ export struct Playlist {
             },
             onDelete: () => {
               // 删除歌单（占位）
+
             }
           })
         }, (item: PlaylistData) => item.title)
+        Blank().width("100%").height(60)
+
       }
       .width('100%')
       .padding({
@@ -221,6 +237,8 @@ export struct Playlist {
         top: 16,
         bottom: 32
       })
+
+
     }
     .width('100%')
     .height('100%')
@@ -231,9 +249,25 @@ export struct Playlist {
     // 否则列表第一项会和大标题重叠
     .padding({ top: $r('sys.float.single_line_titlebar_height') })
   }
+
+  private makeNewSongList(){
+    let newColumn : SongListJSON = {
+      name: '新建歌单',
+      songList: []
+    }
+    appendSongList(this.getUIContext().getHostContext() as common.UIAbilityContext, newColumn)
+  }
+
+  private EditSongListColumn(){
+
+  }
+
+
+
+
 }
 
 @Builder
 export function load() {
-  Playlist()
+
 }

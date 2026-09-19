@@ -68,7 +68,9 @@ struct Main {
     new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
     new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')];
 
-  @State Curves_make_sure: boolean = false  // 触发器状态
+  @State Curves_make_sure: boolean = false;  // 触发器状态
+  @State PlayList_make_sure: boolean = false;
+  @State Loading_From_server_sure : boolean = false;
 
 
 
@@ -231,11 +233,14 @@ struct Main {
     if(index === "0"){
       this.Curves_make_sure = !this.Curves_make_sure;
     }if(index === "1"){
-
+      this.PlayList_make_sure = !this.PlayList_make_sure;
     }if(index === "2") {
-
+      this.Loading_From_server_sure = !this.Loading_From_server_sure;
     }
     this.Curves_make_sure = !this.Curves_make_sure;
+    this.PlayList_make_sure = !this.PlayList_make_sure;
+    this.Loading_From_server_sure = !this.Loading_From_server_sure;
+
 
     this.close_Menu();
 
@@ -545,7 +550,7 @@ struct Main {
 
 
         TabContent(){
-          Playlist({navPathStack:this.navPathStack});
+          Playlist({navPathStack:this.navPathStack, triggerFlag: this.PlayList_make_sure });
         }.tabBar(this.tabBarBuilder("sys.symbol.music_fill","歌单列表", 1))
 
 

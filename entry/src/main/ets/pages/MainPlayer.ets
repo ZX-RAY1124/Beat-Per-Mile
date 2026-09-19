@@ -1,6 +1,8 @@
 import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
 import { Center_Button } from '../ets_libs/Button';
 import { EllipseShape } from '@kit.ArkUI';
+import { display } from '@kit.ArkUI';
+
 
 @Component
 struct MainPlayer {
@@ -9,12 +11,19 @@ struct MainPlayer {
     new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
     new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
   @State navPathStack :NavPathStack = new NavPathStack();
+
   @State Status:string[] = ["正在运动","暂停","加速中","减速中"]
   @State Button_1 : Center_Button = new Center_Button(1)
   @State outCircle: Center_Button = new Center_Button(2)
   @State WINDOWS_WID : number = 0;
   @Provide transition_type : NavigationSystemTransitionType =
     NavigationSystemTransitionType.EXPLODE;
+
+  private displayInfo: display.Display = display.getDefaultDisplaySync();
+  private screenWidth: number = this.displayInfo.width;
+  private screenHeight: number = this.displayInfo.height;
+  @State private offsetX: number = 0;
+  @State private offsetY: number = 200; // 初始纵向位置
 
 
   CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
@@ -47,6 +56,22 @@ struct MainPlayer {
     .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
     .margin(5);
   }
+
+
+
+  @Builder FloatWidgetBuild(){
+    Column(){
+      Column()
+        .width(45)
+        .height(45)
+        .borderRadius(5)
+        .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
+        .alignItems(HorizontalAlign.Center)
+        .justifyContent(FlexAlign.Center)
+    }.position({right:0, top:50})
+  }
+
+
 
 
   build(){
@@ -114,6 +139,9 @@ struct MainPlayer {
 
 
         }.position({ x: (this.WINDOWS_WID / 2) - 120, y: "15%" })
+
+
+        this.FloatWidgetBuild();
 
 
 
