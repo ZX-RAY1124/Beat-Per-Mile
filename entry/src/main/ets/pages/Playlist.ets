@@ -1,5 +1,5 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { appendSongList, SongListJSON } from '../ets_libs/PlayListStore';
+import { appendSongList, SongListJSON, SongListParam } from '../ets_libs/PlayListStore';
 import { SongList } from './SongList';
 import { common } from '@kit.AbilityKit';
 
@@ -220,6 +220,7 @@ export struct Playlist {
             },
             onSettings: () => {
               // 设置歌单（占位）
+              this.EditSongListColumn(index);
             },
             onDelete: () => {
               // 删除歌单（占位）
@@ -250,7 +251,7 @@ export struct Playlist {
     .padding({ top: $r('sys.float.single_line_titlebar_height') })
   }
 
-  private makeNewSongList(){
+  private makeNewSongList() : void{
     let newColumn : SongListJSON = {
       name: '新建歌单',
       songList: []
@@ -258,10 +259,10 @@ export struct Playlist {
     appendSongList(this.getUIContext().getHostContext() as common.UIAbilityContext, newColumn)
   }
 
-  private EditSongListColumn(){
-
+  private EditSongListColumn(index: number) : void {
+    const param: SongListParam = {index: index};
+    this.navPathStack.pushPathByName('SongList_Page', param, true);
   }
-
 
 
 
