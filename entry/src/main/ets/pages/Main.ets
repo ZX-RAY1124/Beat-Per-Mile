@@ -73,23 +73,6 @@ struct Main {
   @State Loading_From_server_sure : boolean = false;
 
 
-
-
-  @Builder
-  MyMenu() {
-    Menu() {
-      MenuItem({ content: '编辑', startIcon: $r('sys.symbol.plus') })
-        .onClick(() => { this.isMenuShow = false; promptAction.showToast({ message: '编辑' }); })
-      MenuItem({ content: '删除', startIcon: $r('sys.symbol.plus') })
-        .onClick(() => { this.isMenuShow = false; promptAction.showToast({ message: '删除' }); })
-      MenuItem({ content: '分享', startIcon: $r('sys.symbol.plus') })
-        .onClick(() => { this.isMenuShow = false; promptAction.showToast({ message: '分享' }); })
-    }
-    .radius(12) // 菜单圆角
-  }
-
-
-
   @Builder
   Column_UP(index:number){
     Column(){
@@ -226,7 +209,7 @@ struct Main {
   private column_list: string[][] = [
     ["sys.symbol.arrow_right_up_and_square","新建曲线","现在开始，随心出发","#FF6B6B","0"],
     ["sys.symbol.arrow_right_up_and_square", "新建歌单","创建你的个人频率","#4ECDC4","1" ],
-    ["sys.symbol.arrow_right_up_and_square", "从第三方服务器载入歌曲","带来你爱听的一切","#A78BFA","2"]
+    ["sys.symbol.arrow_right_up_and_square", "查看历史记录","记录你的点点滴滴","#A78BFA","2"]
   ]
 
   private menu_func(index:string){

@@ -1,4 +1,5 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
+import { ComponentContent, Popup, PopupButtonOptions, PopupIconOptions, PopupTextOptions } from '@kit.ArkUI';
 
 /**
  * 歌曲列表（音乐库）
@@ -15,6 +16,21 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
  * 时长数据暂时没有：所有时长位先显示占位符，等 SongData.duration 有值就自动生效
  * （胶囊和面板头部的"总时长"也是同一条路径算出来的）。
  */
+
+class MenuParams {
+  text: string = '';
+  onClick: () => void = () => {};
+}
+
+@Builder
+export function test(params :MenuParams){
+  Menu(){
+    MenuItem() {
+      Text(params.text).fontSize(30)
+    }
+  }.borderRadius(20)
+}
+
 
 /** 一首歌（演示数据，后续接真实音乐库） */
 class SongData {
@@ -64,7 +80,7 @@ const TEXT_SECONDARY: string = '#8A8F99';
 /** 悬浮胶囊 */
 const CAPSULE_BG: string = '#1B1B2F';
 const CAPSULE_HEIGHT: number = 44;
-const CAPSULE_BOTTOM_MARGIN: number = 100;
+const CAPSULE_BOTTOM_MARGIN: number = 50;
 /** 给胶囊留出的列表底部空间，保证最后一首歌能滚到胶囊上方 */
 const CAPSULE_RESERVE: number = CAPSULE_HEIGHT + CAPSULE_BOTTOM_MARGIN + 20;
 
@@ -179,6 +195,7 @@ export struct SongList {
 
 
   build() {
+    HdsNavDestination() {
       Stack({ alignContent: Alignment.Bottom }) {
         List() {
           ForEach(SONGS, (song: SongData, index: number) => {
@@ -227,8 +244,49 @@ export struct SongList {
           this.isSheetShow = false;
         }
       })
+    }.backgroundColor(this.PAGE_BG)
+    .titleBar({
+      content: {
+        title: {
+          mainTitle: "歌曲列表",
+          mainTitleSize: 20
+        },
+        menu: {
+          maxCount: 1,
+          value: [{
+            content: {
+              label: '从本地导入歌曲',
+              componentId: "menu_1",
+              isEnabled:true,
+              action: () => {
+
+              }
+            }, badge: {}
+          },
+            {
+              content: {
+                label: "从服务器导入歌曲",
+                componentId: "menu_2",
+                action: () => {
 
 
+                }
+              }, badge: {}
+            },
+            {
+              content: {
+                label: "切换第三方服务器",
+                componentId: "menu_3",
+                action: () => {
+
+                }
+              }, badge: {}
+            }]
+
+        }
+
+      }
+    })
   }
 
   /** 底部悬浮胶囊：汇总当前播放列表（首数 + 总时长），点它上拉面板 */
