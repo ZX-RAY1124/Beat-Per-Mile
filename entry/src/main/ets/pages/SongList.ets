@@ -31,6 +31,10 @@ export function test(params :MenuParams){
   }.borderRadius(20)
 }
 
+export interface param_index{
+  index: number;
+}
+
 
 /** 一首歌（演示数据，后续接真实音乐库） */
 class SongData {
@@ -245,6 +249,14 @@ export struct SongList {
         }
       })
     }.backgroundColor(this.PAGE_BG)
+    .onReady((ctx: NavDestinationContext) => {
+      this.navPathStack = ctx.pathStack;
+      const param: param_index = ctx.pathInfo.param as param_index;
+
+      if(param !== undefined && param !== null){
+        this.loadSongList(param.index)
+      }
+    })
     .titleBar({
       content: {
         title: {
@@ -399,6 +411,11 @@ export struct SongList {
     .width('100%')
     .height('100%')
   }
+
+  private loadSongList(index: number){
+
+  }
+
 
   /** 面板里一行的副标题：作者 · 时长 · BPM */
   private sheetSubtitle(song: SongData): string {

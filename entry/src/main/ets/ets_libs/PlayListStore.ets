@@ -27,7 +27,8 @@ export interface SongJSON {
 
 export interface SongListJSON {
   name: string,
-  songList: SongJSON[]
+  songList: SongJSON[],
+  colorPlan: number
 }
 
 
@@ -42,7 +43,8 @@ export interface SongJSON_ROW {
 
 interface songListJSON_ROW {
   name?: string,
-  songList?: SongJSON[]
+  songList?: SongJSON[],
+  colorPlan?: number
 }
 
 /**文件夹名*/
@@ -95,7 +97,8 @@ function parseFile(text: string) : SongListJSON {
     const raw : songListJSON_ROW = JSON.parse(text) as songListJSON_ROW;
     const file: SongListJSON = {
       name: raw.name !== undefined ? raw.name : '',
-      songList: raw.songList !== undefined ? raw.songList : []
+      songList: raw.songList !== undefined ? raw.songList : [],
+      colorPlan: raw.colorPlan !== undefined ? raw.colorPlan : 0
     }
     return file;
 
@@ -103,7 +106,8 @@ function parseFile(text: string) : SongListJSON {
     console.error('解析播放列表 JSON 失败：' + JSON.stringify(e));
     const bad: SongListJSON =  {
       name:  '',
-      songList: []
+      songList: [],
+      colorPlan: 0
     }
     return bad;
   }

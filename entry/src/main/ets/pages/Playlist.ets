@@ -1,5 +1,5 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { appendSongList, SongListJSON, SongListParam } from '../ets_libs/PlayListStore';
+import { appendSongList, loadAll, SongListJSON, SongListParam } from '../ets_libs/PlayListStore';
 import { SongList } from './SongList';
 import { common } from '@kit.AbilityKit';
 
@@ -201,7 +201,7 @@ export struct Playlist {
   MakePlayListItem(){
     if(this.triggerFlag){
       let index: number = Math.floor((Math.random()*3))
-      this.PLAYLISTS.push( new PlaylistData('新建歌单', COLOR_PLAN[index][0], 20, COLOR_PLAN[index][1]))
+      this.makeNewSongList();
     }
   }
 
@@ -254,10 +254,26 @@ export struct Playlist {
   private makeNewSongList() : void{
     let newColumn : SongListJSON = {
       name: '新建歌单',
-      songList: []
+      songList: [],
+      colorPlan: this.getRandomInt(0,2)
     }
+
     appendSongList(this.getUIContext().getHostContext() as common.UIAbilityContext, newColumn)
+    this.PLAYLISTS.push(
+      new PlaylistData(newColumn.name, COLOR_PLAN[newColumn.colorPlan][0], 0, COLOR_PLAN[newColumn.colorPlan][1])
+    )
   }
+
+  private readSongList(): void {
+    let SL_JSON: SongListJSON[] = loadAll(this.getUIContext().getHostContext() as common.UIAbilityContext)
+    this.PLAYLISTS = []   //清空column
+    for(let i = 0; i<= SL_JSON.length; i++){
+      this.PLAYLISTS.push(
+        new PlaylistData(SL_JSON[i].name, COLOR_PLAN[SL_JSON[i].colorPlan][0], SL_JSON[i].songList.length, COLOR_PLAN[SL_JSON[i].colorPlan][1])
+      )
+    }
+  }
+
 
   private EditSongListColumn(index: number) : void {
     const param: SongListParam = {index: index};
@@ -265,6 +281,11 @@ export struct Playlist {
   }
 
 
+  private getRandomInt(min: number, max: number): number {
+  min = Math.ceil(min);
+  max = Math.floor(max);
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
 
 }
 
@@ -272,3 +293,4 @@ export struct Playlist {
 export function load() {
 
 }
+
