@@ -438,6 +438,7 @@ export struct SongList {
   }
 
   private save_playList_plan(plan: number[]): SongListJSON {
+    plan.reverse();
     let callback: SongListJSON = {name:this.SONG_LIST_NAME,songList:[],colorPlan:this.COLOR_PLAN, index:0}
     plan.forEach((item) => {
       let SONG_item: SongJSON = {
