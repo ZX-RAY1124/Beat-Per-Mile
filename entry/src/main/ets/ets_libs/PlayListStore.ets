@@ -10,7 +10,7 @@ export function bumpRevision(): void{
   AppStorage.setOrCreate<number>(SONG_LIST_REVISION_KEY, (n === undefined ? 0 : n) + 1);
 }
 
-enum selection {
+export enum selection {
   ONLINE,
   OFFLINE
 }
@@ -20,12 +20,13 @@ enum selection {
 export interface SongJSON {
   name: string;
   author: string,
-  time: number;
+  time: string;
   BPM: number;
   type: selection;
 }
 
 export interface SongListJSON {
+  index: number,
   name: string,
   songList: SongJSON[],
   colorPlan: number
@@ -36,12 +37,13 @@ export interface SongListJSON {
 export interface SongJSON_ROW {
   name?: string;
   author?: string,
-  time?: number;
+  time?: string;
   BPM?: number;
   type?: selection;
 }
 
 interface songListJSON_ROW {
+  index: number
   name?: string,
   songList?: SongJSON[],
   colorPlan?: number
@@ -60,12 +62,7 @@ export function minToSec(min: number): number {
   return min * 60;
 }
 
-/** **全局索引表**
- * 在`PlayList.ets`和`SongList.ets`中充当检索索引
- * */
-export interface SongListParam {
-  index: number;
-}
+
 
 /** 文件夹的绝对路径*/
 export function songListDir(ctx: common.UIAbilityContext): string{
@@ -92,13 +89,14 @@ export function fileNameOf(index: number): string {
 
 
 /** 解析文件 **通用类***/
-function parseFile(text: string) : SongListJSON {
+function parseFile(text: string, idx: number) : SongListJSON {
   try{
     const raw : songListJSON_ROW = JSON.parse(text) as songListJSON_ROW;
     const file: SongListJSON = {
       name: raw.name !== undefined ? raw.name : '',
       songList: raw.songList !== undefined ? raw.songList : [],
-      colorPlan: raw.colorPlan !== undefined ? raw.colorPlan : 0
+      colorPlan: raw.colorPlan !== undefined ? raw.colorPlan : 0,
+      index: idx ? idx : 0
     }
     return file;
 
@@ -107,7 +105,8 @@ function parseFile(text: string) : SongListJSON {
     const bad: SongListJSON =  {
       name:  '',
       songList: [],
-      colorPlan: 0
+      colorPlan: 0,
+      index: 0
     }
     return bad;
   }
@@ -219,7 +218,7 @@ export function loadAll(ctx: common.UIAbilityContext): SongListJSON[] {
     const path: string = dir + '/' + idx[i].toString() + '.json';
     try {
       const text: string = fileIo.readTextSync(path);
-      out.push(parseFile(text));
+      out.push(parseFile(text, idx[i]));
     } catch (err) {
       console.error('读曲线失败：' + path + ' ' + JSON.stringify(err));
     }

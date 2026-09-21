@@ -1,5 +1,10 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { ComponentContent, Popup, PopupButtonOptions, PopupIconOptions, PopupTextOptions } from '@kit.ArkUI';
+import { picker } from '@kit.CoreFileKit';
+import { fileIo } from '@kit.CoreFileKit';
+import { SongJSON, SongListJSON, selection, saveAt } from '../ets_libs/PlayListStore';
+import { common } from '@kit.AbilityKit';
+import call from '@ohos.telephony.call';
+import { loadAll } from '../ets_libs/CurveStore';
 
 /**
  * 歌曲列表（音乐库）
@@ -17,23 +22,6 @@ import { ComponentContent, Popup, PopupButtonOptions, PopupIconOptions, PopupTex
  * （胶囊和面板头部的"总时长"也是同一条路径算出来的）。
  */
 
-class MenuParams {
-  text: string = '';
-  onClick: () => void = () => {};
-}
-
-@Builder
-export function test(params :MenuParams){
-  Menu(){
-    MenuItem() {
-      Text(params.text).fontSize(30)
-    }
-  }.borderRadius(20)
-}
-
-export interface param_index{
-  index: number;
-}
 
 
 /** 一首歌（演示数据，后续接真实音乐库） */
@@ -43,17 +31,19 @@ class SongData {
   bpm: number;
   /** 时长，形如 '3:42'；暂时没有这个数据，留空时显示占位符 */
   duration: string;
+  type:selection;
 
   constructor(title: string, artist: string, bpm: number, duration: string = '') {
     this.title = title;
     this.artist = artist;
     this.bpm = bpm;
     this.duration = duration;
+    this.type = selection.OFFLINE;    //要改,测试用
   }
 }
 
 /** 演示数据 */
-const SONGS: SongData[] = [
+let SONGS: SongData[] = [
   new SongData('Crave Wave', 'LandRoot', 150),
   new SongData('The Chariot ~REVIIVAL~', 'Attoclef', 190),
   new SongData('Luminescence', '米虾Fomiki & 初云CLoudie', 184),
@@ -195,7 +185,14 @@ export struct SongList {
   @State selectedIndexes: number[] = [];
   /** 上拉面板是否展开 */
   @State isSheetShow: boolean = false;
+  /** 全局播放Json列表*/
+  @State G_Playlist :Array<SongJSON> = [];
   PAGE_BG: string = '#F5F6F8';
+
+  //全局表
+  @State SONG_LIST_NAME:string = '';
+  COLOR_PLAN = 0;
+  G_INDEX = 0;
 
 
   build() {
@@ -251,10 +248,14 @@ export struct SongList {
     }.backgroundColor(this.PAGE_BG)
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
-      const param: param_index = ctx.pathInfo.param as param_index;
+      const param: SongListJSON = ctx.pathInfo.param as SongListJSON;
+      //歌单数据注入
+      this.SONG_LIST_NAME = param.name;
+      this.COLOR_PLAN = param.colorPlan;
+      this.G_INDEX = param.index - 1;
 
       if(param !== undefined && param !== null){
-        this.loadSongList(param.index)
+        this.loadPlayList(param.songList)
       }
     })
     .titleBar({
@@ -271,7 +272,7 @@ export struct SongList {
               componentId: "menu_1",
               isEnabled:true,
               action: () => {
-
+                load_from_native(this.getUIContext().getHostContext() as common.UIAbilityContext)
               }
             }, badge: {}
           },
@@ -298,6 +299,10 @@ export struct SongList {
         }
 
       }
+    })
+    .onBackPressed(() => {
+      this.showBackDialog();
+      return true;
     })
   }
 
@@ -347,6 +352,10 @@ export struct SongList {
       }
       .width('100%')
       .padding({ left: 20, right: 20, top: 4, bottom: 12 })
+
+      TextInput({placeholder:"请输入播放列表名称", text:this.SONG_LIST_NAME}).height(40).width("80%").id("enterName").onChange((value:string) => {
+        this.SONG_LIST_NAME = value;
+      })
 
       List() {
         // 用 Repeat 而不是 ForEach：Repeat 自带 onMove，长按拖动排序走的是系统拖拽
@@ -412,9 +421,82 @@ export struct SongList {
     .height('100%')
   }
 
-  private loadSongList(index: number){
-
+  private loadPlayList(songList: SongJSON[]){
+    songList.forEach((item) => {
+      SONGS.forEach((song_item) => {
+        if(item.name === song_item.title){
+          this.toggle(SONGS.indexOf(song_item));
+        }
+      })
+    })
   }
+
+  private loadAudioList(songList: Array<SongJSON>){
+    for(let i = 0; i < songList.length; i ++){
+      SONGS.push(new SongData(songList[i].name,songList[i].author,songList[i].BPM,songList[i].time.toString()))
+    }
+  }
+
+  private save_playList_plan(plan: number[]): SongListJSON {
+    let callback: SongListJSON = {name:this.SONG_LIST_NAME,songList:[],colorPlan:this.COLOR_PLAN, index:0}
+    plan.forEach((item) => {
+      let SONG_item: SongJSON = {
+        name: SONGS[item].title ? SONGS[item].title : '',
+        author: SONGS[item].artist ? SONGS[item].artist : '',
+        time: SONGS[item].duration ? SONGS[item].duration : '',
+        BPM: SONGS[item].bpm ? SONGS[item].bpm : 0,
+        type: SONGS[item].type,
+      }
+      callback.songList.push(SONG_item);
+    })
+
+    return callback;
+  }
+
+  private showBackDialog(): void {
+    this.getUIContext().showAlertDialog({
+      title: '确认保存',
+      message: `歌单名称:${this.SONG_LIST_NAME},歌曲数:${this.selectedIndexes.length}`,
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+
+          this.getUIContext().showAlertDialog({
+            title: '确认退出?',
+            message: `您还未保存歌单`,
+            autoCancel: true,
+            primaryButton: {
+              value: '确定',
+              action: () => {
+                this.navPathStack.pop();
+                loadAll(this.getUIContext().getHostContext() as common.UIAbilityContext);
+              }
+            },
+            secondaryButton: {
+              value: '取消',
+              action: () => {
+
+              }
+            }
+          })
+
+
+        }
+      },
+      secondaryButton: {
+        value: '确定',
+        action: () => {
+          let result: SongListJSON = this.save_playList_plan(this.selectedIndexes)
+          saveAt(this.getUIContext().getHostContext() as common.UIAbilityContext,this.G_INDEX,result);
+          this.navPathStack.pop();
+        }
+      }
+    })
+  }
+
+
+
 
 
   /** 面板里一行的副标题：作者 · 时长 · BPM */
@@ -485,4 +567,16 @@ export struct SongList {
 @Builder
 export function load() {
   SongList()
+}
+
+async function load_from_native(context: common.Context) : Promise<void>{
+  const mPicker = new picker.AudioViewPicker(context);
+  const options = new picker.AudioSelectOptions();
+
+  try {
+    const uris: Array<string> = await mPicker.select(options);
+    console.info('选中音频 URI:', uris[0]);
+  } catch (err) {
+    console.error('选择音频失败:', err);
+  }
 }

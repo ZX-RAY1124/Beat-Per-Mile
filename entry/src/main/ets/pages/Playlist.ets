@@ -1,5 +1,5 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { appendSongList, loadAll, SongListJSON, SongListParam } from '../ets_libs/PlayListStore';
+import { appendSongList, loadAll, SongListJSON, deleteAt, bumpRevision } from '../ets_libs/PlayListStore';
 import { SongList } from './SongList';
 import { common } from '@kit.AbilityKit';
 
@@ -176,16 +176,22 @@ struct PlaylistCard {
 
 @Component
 export struct Playlist {
+
+  @State listVision:number = 0;
   @State navPathStack: NavPathStack = new NavPathStack();
   /** 当前选中的项：0..n 对应 PLAYLISTS 的下标 */
   @State selectedIndex: number = 0;
 
   PAGE_BG: string = '#F5F6F8';
   /** 歌单列表（演示数据，后续接真实歌单） */
+
+  SL_JSON:SongListJSON[] = [];       // JSON读档
   @State PLAYLISTS: PlaylistData[] = [
+    /*
     new PlaylistData('跑步歌单', COLOR_PLAN[0][0], 12, COLOR_PLAN[0][1]),
     new PlaylistData('夜跑精选', COLOR_PLAN[1][0], 8, COLOR_PLAN[1][1]),
     new PlaylistData('节奏训练', COLOR_PLAN[2][0], 20, COLOR_PLAN[2][1])
+    * */
   ];
 
   /** 切换选中项，用 animateTo 让浮起 / 描边 / 阴影过渡 */
@@ -203,6 +209,17 @@ export struct Playlist {
       let index: number = Math.floor((Math.random()*3))
       this.makeNewSongList();
     }
+  }
+
+
+  @StorageLink('songListStoreRevision') @Watch ('onStoreChanged') storeRevision: number = 0;
+
+  onStoreChanged(): void{
+    this.readSongList()
+  }
+
+  onDidBuild(): void {
+    this.readSongList();
   }
 
   build() {
@@ -224,12 +241,11 @@ export struct Playlist {
             },
             onDelete: () => {
               // 删除歌单（占位）
-
+              this.showWarmDialog(index);
             }
           })
-        }, (item: PlaylistData) => item.title)
+        }, (item: PlaylistData) => item.title + '#' + this.listVision.toString())
         Blank().width("100%").height(60)
-
       }
       .width('100%')
       .padding({
@@ -251,40 +267,73 @@ export struct Playlist {
     .padding({ top: $r('sys.float.single_line_titlebar_height') })
   }
 
-  private makeNewSongList() : void{
-    let newColumn : SongListJSON = {
+  private makeNewSongList() : void {
+    let newColumn: SongListJSON = {
       name: '新建歌单',
       songList: [],
-      colorPlan: this.getRandomInt(0,2)
+      colorPlan: this.getRandomInt(0, 2),
+      index: this.PLAYLISTS.length + 1
     }
 
+    this.getUIContext()
     appendSongList(this.getUIContext().getHostContext() as common.UIAbilityContext, newColumn)
-    this.PLAYLISTS.push(
-      new PlaylistData(newColumn.name, COLOR_PLAN[newColumn.colorPlan][0], 0, COLOR_PLAN[newColumn.colorPlan][1])
-    )
+    this.readSongList();
+  }
+
+  private delSongList(index: number) : void {
+    let done:boolean =  deleteAt(this.getUIContext().getHostContext() as common.UIAbilityContext, index);   //删除歌曲
+    this.readSongList();
+    if(!done){
+      console.error("Delete Fail");
+    }
   }
 
   private readSongList(): void {
-    let SL_JSON: SongListJSON[] = loadAll(this.getUIContext().getHostContext() as common.UIAbilityContext)
+    this.SL_JSON = loadAll(this.getUIContext().getHostContext() as common.UIAbilityContext)
     this.PLAYLISTS = []   //清空column
-    for(let i = 0; i<= SL_JSON.length; i++){
+    for(let i = 0; i < this.SL_JSON.length; i++){
       this.PLAYLISTS.push(
-        new PlaylistData(SL_JSON[i].name, COLOR_PLAN[SL_JSON[i].colorPlan][0], SL_JSON[i].songList.length, COLOR_PLAN[SL_JSON[i].colorPlan][1])
+        new PlaylistData(this.SL_JSON[i].name, COLOR_PLAN[this.SL_JSON[i].colorPlan][0], this.SL_JSON[i].songList.length, COLOR_PLAN[this.SL_JSON[i].colorPlan][1])
       )
     }
+    this.listVision = this.listVision + 1;         //让Foreach的键发生变化，更新卡片
   }
 
 
+
   private EditSongListColumn(index: number) : void {
-    const param: SongListParam = {index: index};
+    const param: SongListJSON = this.SL_JSON[index];
     this.navPathStack.pushPathByName('SongList_Page', param, true);
+  }
+
+  private showWarmDialog(index: number){
+    if (index < 0 || index >= this.PLAYLISTS.length){
+      return;
+    }
+    const playlist: PlaylistData = this.PLAYLISTS[index];
+    this.getUIContext().showAlertDialog({
+      title: '删除这个播放列表？',
+      message: '「' + playlist.title + '」删除后不能恢复',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        action: () => {
+          this.delSongList(index);
+        }
+      }
+    })
   }
 
 
   private getRandomInt(min: number, max: number): number {
-  min = Math.ceil(min);
-  max = Math.floor(max);
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+    min = Math.ceil(min);
+    max = Math.floor(max);
+    return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 }

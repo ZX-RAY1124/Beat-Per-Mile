@@ -215,14 +215,16 @@ struct Main {
   private menu_func(index:string){
     if(index === "0"){
       this.Curves_make_sure = !this.Curves_make_sure;
+      this.Curves_make_sure = !this.Curves_make_sure;
     }if(index === "1"){
       this.PlayList_make_sure = !this.PlayList_make_sure;
+      this.PlayList_make_sure = !this.PlayList_make_sure;
+
     }if(index === "2") {
       this.Loading_From_server_sure = !this.Loading_From_server_sure;
+      this.Loading_From_server_sure = !this.Loading_From_server_sure;
+
     }
-    this.Curves_make_sure = !this.Curves_make_sure;
-    this.PlayList_make_sure = !this.PlayList_make_sure;
-    this.Loading_From_server_sure = !this.Loading_From_server_sure;
 
 
     this.close_Menu();

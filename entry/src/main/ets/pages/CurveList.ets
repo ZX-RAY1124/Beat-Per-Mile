@@ -221,8 +221,10 @@ struct CurveCard {
   onSettings: () => void = () => {
   };
   onTags: () => void = () => {
+
   };
   onDelete: () => void = () => {
+
   };
 
 
