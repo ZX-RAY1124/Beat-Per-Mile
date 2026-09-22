@@ -285,6 +285,7 @@ export struct SongList {
                     clearInterval(progressTimer);
                     if (bpm !== null) {
                       console.info(`分析完成: BPM=${bpm}, 已生成 ${dir.replace(/\.[^.]+$/, '')}_beats.csv`);
+
                     } else {
                       console.error(`分析失败: ${err ?? '未知原因'}`);
                     }
@@ -575,6 +576,14 @@ export struct SongList {
     arr.splice(to, 0, moved[0]);
     this.selectedIndexes = arr;
   }
+
+  private add_music(name: string, BPM: number, author: string){
+
+  }
+
+
+
+
 }
 
 @Builder

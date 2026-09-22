@@ -1,0 +1,15 @@
+            if(ctx->cancelled.load()){
+                quit = true;
+                OH_AudioRenderer_Stop(audioRenderer);
+                clear(ctx);
+                
+            }
+            player.pause();
+        }
+        player.resume();
+
+        
+        if(!finished && !quit){
+            //判断结束
+            //finished = true;
+            long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
