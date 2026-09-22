@@ -5,8 +5,8 @@ import { audio } from '@kit.AudioKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
-import { audioRendererInit, changeSpeed,
-  musicAnalyse,
+import {changeSpeed,
+  analyzeMusicAsync,
   music_cancel, music_pause, music_play, music_resume } from 'libentry.so';
 import { fileIo } from '@kit.CoreFileKit';
 
@@ -38,7 +38,15 @@ struct audio_test {
 
           Button("从Native播放").width(200).height(40).onClick(()=> {
             copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "LostMemory.m4a").then((audioPath:string) => {
-              musicAnalyse(audioPath);
+              // ★ 用异步接口：分析在工作线程上跑，不阻塞主线程
+              //   CSV 落在与 audioPath 相同的目录 + 同名 + _beats.csv
+              analyzeMusicAsync(audioPath, (bpm: number | null, err?: string) => {
+                if (bpm !== null) {
+                  console.info(`分析完成: BPM=${bpm}, 已生成 ${audioPath.replace(/\.[^.]+$/, '')}_beats.csv`);
+                } else {
+                  console.error(`分析失败: ${err ?? '未知原因'}`);
+                }
+              });
               if(!this.player) {
                 this.player = music_play(audioPath, (block: number) => {
                   console.log(block.toString());

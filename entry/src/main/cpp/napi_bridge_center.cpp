@@ -1,4 +1,5 @@
 #include "EssentiaBeats.hpp"
+#include "ffmpeg_decoder.hpp"
 #include "audio_process.h"
 #include "napi/native_api.h"
 #include "hilog/log.h"
@@ -11,6 +12,11 @@
 #include <algorithm>
 #include <atomic>
 #include <vector>
+#include <memory>
+#include <string>
+#include <mutex>
+#include <unordered_map>
+#include <sstream>
 // 暂时不引用 essentia，先验证编译链路没问题
 
 // ─── 播放用环形缓冲区：无锁单生产者-单消费者（SPSC） ───
@@ -260,7 +266,6 @@ static napi_value Squire(napi_env env, napi_callback_info info){
 
 static napi_value analyzeMusic(napi_env env, napi_callback_info info){
     size_t argc = 1;
-    napi_value fileDir;
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     size_t strLen;
@@ -269,6 +274,7 @@ static napi_value analyzeMusic(napi_env env, napi_callback_info info){
     memset(buf, 0, strLen + 1);
     sourceStatus = napi_get_value_string_utf8(env, args[0], buf, strLen + 1, &strLen);
     if(sourceStatus == napi_ok){
+        OH_LOG_INFO(LOG_APP, "%{public}s",buf);
         eb::detect_file_to_csv(buf);
     }
 
@@ -276,12 +282,317 @@ static napi_value analyzeMusic(napi_env env, napi_callback_info info){
     return nullptr;
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  音频离线分析（BPM / 拍点 → CSV）—— 异步版本
+//
+//  为什么必须异步：
+//    NAPI 的同步函数是在 ArkTS 的主线程（JS 线程）上直接执行的。
+//    eb::detect_file_to_csv 内部走 Essentia 的 MonoLoader 解码 + 
+//    RhythmExtractor2013("multifeature") 全曲分析，一首 3~4 分钟的歌要
+//    几秒到十几秒。放在主线程上会把 UI/事件循环整段卡死，
+//    系统看门狗判定 THREAD_BLOCK_6S，直接杀进程 —— 用户看到的就是
+//    "点一下按钮 App 就卡死退出"，而且 CSV 根本来不及写出。
+//
+//  做法：照搬本文件已有的 music_play 模式
+//    主线程只做参数解析 + 建 TSFN，然后立刻返回；
+//    真正的分析在 worker 线程上跑；
+//    完成后通过 TSFN 把结果/错误回传主线程执行 ArkTS 回调。
+//    这样既不阻塞主线程，也能把失败原因告诉上层（旧版返回 void，
+//    失败时静默无输出，这正是"日志有、CSV 没有"的来源）。
+// ════════════════════════════════════════════════════════════════════════
 
-
+/** 单调时钟毫秒（steady，不受系统时间调整影响） */
 static long long nowMs() {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
+
+/** 一次分析任务：worker 线程持有它，完成后由 TSFN 终结回调释放。 */
+struct AnalyseTask {
+    napi_threadsafe_function tsfn = nullptr;
+    std::string audioPath;   // 待分析音频的沙箱绝对路径
+};
+
+// ─── 分析进度（供 ArkTS 轮询，解决"到底卡在哪 / 要等多久"） ───
+// 工作线程写、主线程读，用一把小锁保护。
+static std::mutex g_anaMx;
+static std::string g_anaPhase = "idle";   // idle/decode/detect/write/done/failed
+static int         g_anaPct   = -1;       // 0~100，-1 = 未知
+static long long   g_anaStartMs = 0;      // 开始时刻（steady 毫秒）
+static long long   g_anaEndMs   = 0;      // 结束时刻
+static std::string g_anaErr;
+
+/** 把任意字符串转义成 JSON 字符串字面量的内容（用长度循环，不依赖静态分析） */
+static std::string jsonEscape(const std::string& s) {
+    std::string o;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        switch (c) {
+        case '"':  o += "\\\""; break;
+        case '\\': o += "\\\\"; break;
+        case '\n': o += "\\n";  break;
+        case '\r': o += "\\r";  break;
+        case '\t': o += "\\t";  break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                o += ' ';   // 控制字符直接替换成空格，够用且安全
+            } else {
+                o += c;
+            }
+        }
+    }
+    return o;
+}
+
+/** 更新分析阶段（工作线程调用）。pct < 0 表示百分比未知。 */
+static void setAnalysePhase(const std::string& phase, int pct) {
+    std::lock_guard<std::mutex> lk(g_anaMx);
+    g_anaPhase = phase;
+    g_anaPct = pct;
+}
+
+/** 读当前分析状态，输出一行 JSON 供 ArkTS 解析 */
+static napi_value GetAnalyseStatus(napi_env env, napi_callback_info info) {
+    (void)info;
+    std::string phase;
+    int pct = -1;
+    long long startMs = 0, endMs = 0;
+    std::string err;
+    {
+        std::lock_guard<std::mutex> lk(g_anaMx);
+        phase = g_anaPhase;
+        pct = g_anaPct;
+        startMs = g_anaStartMs;
+        endMs = g_anaEndMs;
+        err = g_anaErr;
+    }
+    long long now = nowMs();
+    const long long end = (endMs > 0) ? endMs : now;
+    const long long elapsed = (startMs > 0) ? (end - startMs) : 0;
+
+    std::ostringstream os;
+    os << "{\"phase\":\"" << jsonEscape(phase) << "\""
+       << ",\"pct\":" << pct
+       << ",\"elapsedMs\":" << elapsed
+       << ",\"running\":" << ((phase != "idle" && phase != "done" && phase != "failed") ? "true" : "false")
+       << ",\"error\":\"" << jsonEscape(err) << "\"}";
+
+    const std::string s = os.str();
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, s.c_str(), s.size(), &out);
+    return out;
+}
+
+/** TSFN 终结回调：由 napi_release_threadsafe_function 触发，在创建线程（主线程）执行 */
+static void AsyncCleanupCallback(napi_env env, void *finalizeData, void *finalizeHint) {
+    (void)env;
+    (void)finalizeHint;
+    delete static_cast<AnalyseTask *>(finalizeData);
+    OH_LOG_INFO(LOG_APP, "[analyse] task released");
+}
+
+/** TSFN 主线程回调：把结果或错误交给 ArkTS */
+static void AnalyseCallback(napi_env env, napi_value jsCallback, void *context, void *data) {
+    (void)context;
+    if (jsCallback == nullptr || data == nullptr) return;
+
+    // data 的所有权：本回调负责 delete
+    std::unique_ptr<eb::BeatResult> result(static_cast<eb::BeatResult *>(data));
+
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    napi_value argv[2] = {undefined, undefined};
+    size_t argc = 0;
+
+    if (result->ok) {
+        // 成功：第一个参数 = BPM（ArkTS 侧取数字即代表成功）
+        napi_create_double(env, result->bpm, &argv[0]);
+        argc = 1;
+        OH_LOG_INFO(LOG_APP, "[analyse] ok: bpm=%{public}.3f ticks=%{public}u",
+                    result->bpm, static_cast<unsigned int>(result->ticks.size()));
+    } else {
+        // 失败：第一个参数 = null，第二个参数 = 人类可读原因
+        napi_get_null(env, &argv[0]);
+        napi_create_string_utf8(env, result->error.c_str(), NAPI_AUTO_LENGTH, &argv[1]);
+        argc = 2;
+        OH_LOG_ERROR(LOG_APP, "[analyse] failed: %{public}s", result->error.c_str());
+    }
+
+    napi_value global = nullptr;
+    napi_get_global(env, &global);
+    napi_call_function(env, global, jsCallback, argc, argv, nullptr);
+}
+
+/** worker 线程：真正干活的地方（解码 + 节拍检测 + 写 CSV） */
+static void AnalyseWorkerThread(AnalyseTask *task) {
+    std::unique_ptr<eb::BeatResult> result(new eb::BeatResult());
+    try {
+        // ① 先用项目自己的 FFmpeg 解码成「单声道 44100Hz float」。
+        //    Essentia 自带的 AudioLoader 在某些文件上连容器都探测不出来
+        //    （AVERROR_INVALIDDATA），而同一份 libavformat 由本工程调用是成功的，
+        //    所以这里绕开 Essentia 的加载器，只借它的**分析算法**。
+        setAnalysePhase("decode", 0);
+        bpmaudio::DecodeOptions dopt;
+        // 进度回调运行在**本工作线程**上，只做日志 + 更新状态，不碰 UI
+        // note 可能是 "decode 40%"（总长已知）或 "decode 已解码 12s (总长未知)"
+        dopt.onProgress = [](double p, const std::string& note) {
+            const int pct = (p < 0.0) ? -1 : static_cast<int>(p * 100.0);
+            OH_LOG_INFO(LOG_APP, "[analyse] %{public}s", note.c_str());
+            setAnalysePhase("decode", pct);
+        };
+        bpmaudio::DecodeResult dec = bpmaudio::decodeToMono44k(task->audioPath, dopt);
+        if (dec.ok) {
+            OH_LOG_INFO(LOG_APP,
+                        "[analyse] ffmpeg 解码成功: codec=%{public}s rate=%{public}d "
+                        "samples=%{public}u dur=%{public}.2fs",
+                        dec.codecName.c_str(), dec.sampleRate,
+                        static_cast<unsigned int>(dec.samples.size()), dec.durationSec);
+
+            eb::Options opt;
+            setAnalysePhase("detect", -1);           // 节拍分析：算不出百分比，只报阶段
+            const long long t0 = nowMs();
+            *result = eb::detect(dec.samples, opt);
+            OH_LOG_INFO(LOG_APP,
+                        "[analyse] 节拍分析耗时 %{public}lld ms, ok=%{public}d ticks=%{public}u",
+                        static_cast<long long>(nowMs() - t0), result->ok ? 1 : 0,
+                        static_cast<unsigned int>(result->ticks.size()));
+
+            if (result->ok && !result->ticks.empty()) {
+                // 写 CSV（路径规则与 detect_file_to_csv 保持一致：同名目录 + _beats.csv）
+                setAnalysePhase("write", -1);
+                const std::string out = eb::detail::strip_extension(task->audioPath) + "_beats.csv";
+                const std::string song = eb::detail::base_name(
+                    eb::detail::strip_extension(task->audioPath));
+                std::string werr;
+                if (!eb::save_beats_csv(out, result->ticks, song, "essentia-ffmpeg", &werr)) {
+                    result->ok = false;
+                    result->error = werr;
+                }
+                OH_LOG_INFO(LOG_APP, "[analyse] csv -> %{public}s", out.c_str());
+            } else {
+                // ★ 关键：解码是成功的，这里失败说明"音频能读但算不出拍点"。
+                //   必须把这条原因保留下来 —— 不能被下面 Essentia 回退的
+                //   "Invalid data found" 覆盖掉，否则会把排查引向完全无关的方向。
+                const std::string why =
+                    result->error.empty() ? std::string("节拍检测未产出任何拍点") : result->error;
+                OH_LOG_ERROR(LOG_APP,
+                             "[analyse] 解码成功但节拍检测失败: %{public}s "
+                             "(时长 %{public}.2fs，样本 %{public}u) —— 素材可能过短或节奏过弱",
+                             why.c_str(), dec.durationSec,
+                             static_cast<unsigned int>(dec.samples.size()));
+                result->ok = false;
+                result->error = std::string("解码成功但节拍检测失败: ") + why;
+                // 解码本身没问题，就不必再让 Essentia 去读一遍文件了
+                // （那条路对 m4a 必定报 Invalid data found，只会污染日志和错误信息）
+            }
+        } else {
+            OH_LOG_ERROR(LOG_APP, "[analyse] ffmpeg 解码失败: %{public}s", dec.error.c_str());
+
+            // ② 仅当 ffmpeg 连"解码"这一步都没成功时，才回退到 Essentia 自带的加载器。
+            OH_LOG_INFO(LOG_APP, "[analyse] 回退到 eb::detect_file_to_csv（ffmpeg 解码未成功）");
+            const std::string primaryErr = dec.error;
+            eb::BeatResult fallback = eb::detect_file_to_csv(task->audioPath);
+            if (fallback.ok) {
+                *result = fallback;
+            } else {
+                // 两条路都失败：把两个原因都报出来，便于判断到底哪一层坏了
+                std::string both = "ffmpeg: " + (primaryErr.empty() ? std::string("(无)") : primaryErr);
+                both += " | essentia: ";
+                both += fallback.error.empty() ? std::string("(无)") : fallback.error;
+                result->ok = false;
+                result->error = both;
+            }
+        }
+    } catch (const std::exception &e) {
+        result->ok = false;
+        result->error = std::string("分析异常: ") + e.what();
+    } catch (...) {
+        result->ok = false;
+        result->error = "分析异常: 未知错误";
+    }
+
+    // 落定终态：这个阶段串是"任务确实跑完了"的最后证据
+    {
+        std::lock_guard<std::mutex> lk(g_anaMx);
+        g_anaPhase = result->ok ? "done" : "failed";
+        g_anaPct   = result->ok ? 100 : -1;
+        g_anaEndMs = nowMs();
+        g_anaErr   = result->ok ? std::string() : result->error;
+    }
+    OH_LOG_INFO(LOG_APP, "[analyse] 任务结束: %{public}s", result->ok ? "OK" : "FAILED");
+
+    napi_call_threadsafe_function(task->tsfn, result.get(), napi_tsfn_blocking);
+    result.release();   // 所有权已移交给 AnalyseCallback
+    napi_release_threadsafe_function(task->tsfn, napi_tsfn_release);
+}
+
+/**
+ * analyzeMusicAsync(path, callback) —— 异步分析音频文件并生成 <同名>_beats.csv
+ *   path     : 沙箱内音频文件的绝对路径
+ *   callback : (bpm: number | null, err?: string) => void
+ *              成功 → bpm 为数字；失败 → bpm 为 null 且第二个参数给出原因
+ *   返回     : 无（立即返回，不阻塞主线程）
+ */
+static napi_value analyzeMusicAsync(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    if (argc < 2 || args[0] == nullptr || args[1] == nullptr) {
+        OH_LOG_ERROR(LOG_APP, "[analyse] 需要 (path, callback) 两个参数");
+        return nullptr;
+    }
+
+    // ---- 取路径（napi_get_value_string_utf8 会把长度写进 strLen）----
+    size_t strLen = 0;
+    if (napi_get_value_string_utf8(env, args[0], nullptr, 0, &strLen) != napi_ok) {
+        OH_LOG_ERROR(LOG_APP, "[analyse] 第一个参数不是字符串");
+        return nullptr;
+    }
+    std::string path(strLen, '\0');
+    napi_get_value_string_utf8(env, args[0], &path[0], strLen + 1, &strLen);
+    path.resize(strLen);
+
+    // ---- 建任务（path 由 std::string 拥有，不留裸 new[] 泄漏）----
+    AnalyseTask *task = new AnalyseTask();
+    task->audioPath = path;
+
+    // 重置进度状态：开始计时，阶段先置 decode（工作线程马上会接手）
+    {
+        std::lock_guard<std::mutex> lk(g_anaMx);
+        g_anaPhase = "decode";
+        g_anaPct = 0;
+        g_anaStartMs = nowMs();
+        g_anaEndMs = 0;
+        g_anaErr.clear();
+    }
+
+    napi_value resourceName = nullptr;
+    napi_create_string_utf8(env, "MusicAnalyse", NAPI_AUTO_LENGTH, &resourceName);
+
+    napi_status st = napi_create_threadsafe_function(env,
+                                                     args[1],          // jsCallback
+                                                     nullptr,
+                                                     resourceName,
+                                                     1,                // 队列容量：只回传一次结果
+                                                     1,                // 初始线程数
+                                                     task,             // finalizeData
+                                                     AsyncCleanupCallback,
+                                                     nullptr,
+                                                     AnalyseCallback,
+                                                     &task->tsfn);
+    if (st != napi_ok || task->tsfn == nullptr) {
+        OH_LOG_ERROR(LOG_APP, "[analyse] 创建 threadsafe function 失败: %{public}d", (int)st);
+        delete task;
+        return nullptr;
+    }
+
+    OH_LOG_INFO(LOG_APP, "[analyse] start async: %{public}s", task->audioPath.c_str());
+    std::thread(AnalyseWorkerThread, task).detach();
+    return nullptr;
+}
+
+
 
 static napi_value test_audio(napi_env env, napi_callback_info info){       //测试和外部库链接
     size_t argc = 1;
@@ -641,7 +952,11 @@ static napi_value Init(napi_env env, napi_value exports)
         {"music_cancel", nullptr, musicCancel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"music_pause", nullptr, musicPause, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"changeSpeed", nullptr, speedChange, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"musicAnalyse", nullptr, analyzeMusic, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"musicAnalyse", nullptr, analyzeMusic, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // ★ App 请用这个：异步，不阻塞主线程，且会回传 BPM / 失败原因
+        {"analyzeMusicAsync", nullptr, analyzeMusicAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // 轮询分析进度：返回 JSON 字符串 {phase,pct,elapsedMs,running,error}
+        {"getAnalyseStatus", nullptr, GetAnalyseStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

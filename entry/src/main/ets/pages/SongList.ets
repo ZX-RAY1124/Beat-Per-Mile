@@ -1,10 +1,11 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { picker } from '@kit.CoreFileKit';
-import { fileIo } from '@kit.CoreFileKit';
+import { fileIo as fs } from '@kit.CoreFileKit';
 import { SongJSON, SongListJSON, selection, saveAt } from '../ets_libs/PlayListStore';
 import { common } from '@kit.AbilityKit';
 import call from '@ohos.telephony.call';
 import { loadAll } from '../ets_libs/CurveStore';
+import {analyzeMusicAsync, getAnalyseStatus} from 'libentry.so';
 
 /**
  * 歌曲列表（音乐库）
@@ -272,7 +273,23 @@ export struct SongList {
               componentId: "menu_1",
               isEnabled:true,
               action: () => {
-                load_from_native(this.getUIContext().getHostContext() as common.UIAbilityContext)
+                load_from_native(this.getUIContext().getHostContext() as common.UIAbilityContext).then((dir: string) => {
+                  if (dir.length === 0) {
+                    console.error('未选择音频文件，跳过分析');
+                    return;
+                  }
+                  // 起一个进度定时器：native 侧按阶段/百分比回报，done/failed 自动收尾
+                  const progressTimer = startAnalyseProgress();
+                  // ★ 异步分析：不阻塞主线程；CSV 生成在 <filesDir>/Media/ 下
+                  analyzeMusicAsync(dir, (bpm: number | null, err?: string) => {
+                    clearInterval(progressTimer);
+                    if (bpm !== null) {
+                      console.info(`分析完成: BPM=${bpm}, 已生成 ${dir.replace(/\.[^.]+$/, '')}_beats.csv`);
+                    } else {
+                      console.error(`分析失败: ${err ?? '未知原因'}`);
+                    }
+                  });
+                })
               }
             }, badge: {}
           },
@@ -431,11 +448,6 @@ export struct SongList {
     })
   }
 
-  private loadAudioList(songList: Array<SongJSON>){
-    for(let i = 0; i < songList.length; i ++){
-      SONGS.push(new SongData(songList[i].name,songList[i].author,songList[i].BPM,songList[i].time.toString()))
-    }
-  }
 
   private save_playList_plan(plan: number[]): SongListJSON {
     plan.reverse();
@@ -570,14 +582,310 @@ export function load() {
   SongList()
 }
 
-async function load_from_native(context: common.Context) : Promise<void>{
+/** getAnalyseStatus() 返回的 JSON 结构 */
+interface AnalyseStatus {
+  phase: string;
+  pct: number;
+  elapsedMs: number;
+  running: boolean;
+  error: string;
+}
+
+/** 阶段名 → 人话 */
+function phaseText(phase: string): string {
+  if (phase === 'decode') {
+    return '解码音频';
+  }
+  if (phase === 'detect') {
+    return '节拍分析';
+  }
+  if (phase === 'write') {
+    return '写 CSV';
+  }
+  if (phase === 'done') {
+    return '完成';
+  }
+  if (phase === 'failed') {
+    return '失败';
+  }
+  return phase;
+}
+
+/**
+ * 轮询 native 分析进度并打到日志，形成一条可见的时间线。
+ *
+ * 为什么需要它：分析要跑几秒到几十秒，而"没有任何输出"既可能是还在跑、
+ * 也可能是已经卡死 —— 光看开始和结束两条日志分不清。这里每 500ms 打一次
+ * 阶段 + 进度 + 已耗时，卡在哪一步一眼可见。
+ *
+ * 注意：解码阶段若总时长未知（某些 m4a 的 moov 里没写 duration），
+ * native 侧会退化为在日志里报"已解码 xxs"，此时 pct 为 -1 ——
+ * 这里就不再显示百分比，不再出现无意义的 -1%。
+ *
+ * ⚠️ 调用方必须在 analyzeMusicAsync 的回调里 clearInterval（见调用处），
+ *    否则 done/failed 之后它会一直空转。本函数在检测到终态时也会自行停掉，
+ *    属于双保险。
+ */
+function startAnalyseProgress(): number {
+  let lastLine: string = '';
+  const timer = setInterval(() => {
+    let st: AnalyseStatus;
+    try {
+      st = JSON.parse(getAnalyseStatus()) as AnalyseStatus;
+    } catch (e) {
+      return;
+    }
+    // pct >= 0 才显示百分比；未知时只显示阶段
+    const line: string = `[进度] ${phaseText(st.phase)}` +
+      (st.pct >= 0 ? ` ${st.pct}%` : '') +
+      `  已耗时 ${(st.elapsedMs / 1000).toFixed(1)}s`;
+    if (line !== lastLine) {
+      lastLine = line;
+      console.info(line);
+    }
+    if (!st.running) {
+      clearInterval(timer);
+      if (st.phase === 'failed') {
+        console.error(`[进度] 分析失败: ${st.error}`);
+      } else if (st.phase === 'done') {
+        console.info(`[进度] 分析完成，总耗时 ${(st.elapsedMs / 1000).toFixed(1)}s`);
+      }
+    }
+  }, 500);
+  return timer;
+}
+
+/**
+ * 从系统文件选择器导入音频到沙箱，供 native 分析（analyzeMusicAsync）与播放使用。
+ *
+ * ★ 为什么不用 copyFileSync(fd, path)：
+ *   官方签名虽然允许 src/dest 是「路径或文件描述符」，但实测（HarmonyOS 6.0.2）
+ *   传 picker 拿到的 URI fd 时它**既不抛异常也不拷贝**，落盘是个 0 字节文件 ——
+ *   这正是 FFmpeg 报 "Invalid data found when processing input" 的根因
+ *   （日志证据：copied=0、dstSize=0、head 为空，且捕获分支一行都没打）。
+ *   改用「手动分块 read/write」——这也是本工程 audio_play_test.ets 一直在用、
+ *   并且已被证明有效的导入方式。
+ *
+ * 拷贝后做三项自检并打日志，避免再出现"静默成功但文件是坏的"。
+ * 格式自检只对 m4a/mp4/mov 要求 ftyp 签名；wav/flac/mp3 不适用，不作判定。
+ */
+const COPY_CHUNK_SIZE: number = 8192;
+
+/** 把错误对象压成一行可读文本（HarmonyOS 的 BusinessError 带 code / message） */
+function err2str(e: Object): string {
+  return JSON.stringify(e);
+}
+
+/** byte[] → "00 01 02" */
+function toHex(bytes: Uint8Array, n: number): string {
+  const H: string = '0123456789abcdef';
+  let out: string = '';
+  for (let i = 0; i < n; i++) {
+    if (i > 0) {
+      out += ' ';
+    }
+    out += H.charAt(bytes[i] >> 4) + H.charAt(bytes[i] & 0x0F);
+  }
+  return out;
+}
+
+/** byte[] → "....ftyp...."（不可打印字符显示为 .） */
+function toAscii(bytes: Uint8Array, n: number): string {
+  let out: string = '';
+  for (let i = 0; i < n; i++) {
+    out += (bytes[i] >= 32 && bytes[i] < 127) ? String.fromCharCode(bytes[i]) : '.';
+  }
+  return out;
+}
+
+/**
+ * ⚠️⚠️ 这里踩过一个坑，务必别再犯：
+ *
+ * 早期版本在本函数里为了"探测源文件大小/可读性"，对 probeFile.fd 调了
+ * fs.readSync / fs.read 各读 16 字节。这些调用**是有效的读操作**，会把
+ * 文件描述符的游标推进 32 字节；随后的拷贝循环复用同一个 fd，于是
+ * **从第 32 字节开始拷贝**，目标文件丢掉开头 32 字节。
+ *
+ * 后果（两个都真实发生过）：
+ *   · wav ：丢了 RIFF + fmt 块 ⇒ FFmpeg 算不出总时长（"总长未知"）；
+ *   · m4a ：丢了 ftyp box  ⇒ avformat_open_input 直接报
+ *            "Invalid data found when processing input"。
+ *
+ * 结论：**任何一次"只看一眼"的读都会移动游标。拷贝必须用一个全新的 fd。**
+ */
+async function load_from_native(context: common.Context) : Promise<string>{
   const mPicker = new picker.AudioViewPicker(context);
   const options = new picker.AudioSelectOptions();
 
-  try {
-    const uris: Array<string> = await mPicker.select(options);
-    console.info('选中音频 URI:', uris[0]);
-  } catch (err) {
-    console.error('选择音频失败:', err);
+  const uris: Array<string> = await mPicker.select(options);
+  if (uris === undefined || uris.length === 0) {
+    console.warn('[import] 用户没有选择任何音频文件');
+    return '';
   }
+  const srcUri: string = uris[0];
+  console.info(`[import] picker 返回 uri=${srcUri}`);
+
+  const mediaDir = `${context.filesDir}/Media`;
+  if (!fs.accessSync(mediaDir)) {
+    fs.mkdirSync(mediaDir);
+  }
+
+  // ---- 1. 探测源文件：拿到文件名 + 头部字节，看完【立刻关闭】----
+  //         绝不让这个 fd 活到拷贝阶段（见函数头注释）
+  let fileName: string = 'unknown.bin';
+  let srcHead: string = '(未取到)';
+  try {
+    const probe = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);
+    fileName = probe.name;
+    const head = new ArrayBuffer(32);
+    const n: number = fs.readSync(probe.fd, head);
+    const bytes = new Uint8Array(head);
+    srcHead = `${n}B hex=[${toHex(bytes, n)}] ascii=[${toAscii(bytes, n)}]`;
+    fs.closeSync(probe);                 // ★ 立刻关闭
+  } catch (e) {
+    console.error(`[import] 打开/读取源文件失败: ${err2str(e)}`);
+    return '';
+  }
+  const destPath: string = `${mediaDir}/${fileName}`;
+  console.info(`[import] 源文件 name=${fileName}`);
+  console.info(`[import] 源头部 ${srcHead}`);
+
+  // ---- 2. 清理旧目标（同名目录是早期版本遗留的 bug）----
+  if (fs.accessSync(destPath)) {
+    if (fs.statSync(destPath).isDirectory()) {
+      fs.rmdirSync(destPath);
+    } else {
+      fs.unlinkSync(destPath);
+    }
+  }
+
+  // ---- 3. 拷贝：用全新的 fd，从偏移 0 开始 ----
+  let srcFile: fs.File | undefined = undefined;
+  let dstFile: fs.File | undefined = undefined;
+  let copied: number = 0;
+  try {
+    srcFile = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);       // 新 fd，游标在 0
+    dstFile = fs.openSync(destPath,
+                          fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+    const buf = new ArrayBuffer(COPY_CHUNK_SIZE);              // 复用一块缓冲，不逐块分配
+    while (true) {
+      const n: number = fs.readSync(srcFile.fd, buf);
+      if (n <= 0) {
+        break;
+      }
+      fs.writeSync(dstFile.fd, buf.slice(0, n));
+      copied += n;
+    }
+    fs.fsyncSync(dstFile.fd);
+    fs.closeSync(dstFile);
+    dstFile = undefined;
+  } catch (e) {
+    console.error(`[import] 拷贝失败: ${err2str(e)}`);
+    return '';
+  } finally {
+    if (srcFile !== undefined) {
+      try {
+        fs.closeSync(srcFile);
+      } catch (e) {
+      }
+    }
+    if (dstFile !== undefined) {
+      try {
+        fs.closeSync(dstFile);
+      } catch (e) {
+      }
+    }
+  }
+
+  const dstSize: number = fs.statSync(destPath).size;
+  console.info(`[import] 拷贝完成: copied=${copied} dstSize=${dstSize}`);
+
+  // ---- 4. 逐字节校验（不再依赖任何"大小看起来对"的间接判断）----
+  //   只比前 1MB：字节级偏移错误必然在开头就暴露，
+  //   整文件两遍读在几百 MB 的音频上太慢。
+  let verdict: string = '';
+  let firstDiff: number = -1;
+  let dstHead: string = '';
+  let headEqual: boolean = false;
+  let compared: number = 0;
+  try {
+    const a = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);
+    const b = fs.openSync(destPath, fs.OpenMode.READ_ONLY);
+    // 先各自读头部，用于"源头部 / 目标头部"对照（必须在遍历前读，否则游标已到末尾）
+    const ha = new ArrayBuffer(32);
+    const hb = new ArrayBuffer(32);
+    const na0: number = fs.readSync(a.fd, ha);
+    const nb0: number = fs.readSync(b.fd, hb);
+    const ba = new Uint8Array(ha);
+    const bb = new Uint8Array(hb);
+    dstHead = `${nb0}B hex=[${toHex(bb, nb0)}] ascii=[${toAscii(bb, nb0)}]`;
+    headEqual = (na0 === nb0);
+    if (headEqual) {
+      for (let i = 0; i < na0; i++) {
+        if (ba[i] !== bb[i]) {
+          headEqual = false;
+          firstDiff = i;
+          break;
+        }
+      }
+    }
+
+    const va = new ArrayBuffer(COPY_CHUNK_SIZE);
+    const vb = new ArrayBuffer(COPY_CHUNK_SIZE);
+    const ua = new Uint8Array(va);
+    const ub = new Uint8Array(vb);
+    const kVerifyBytes: number = 1024 * 1024;   // 1MB 足够暴露任何字节级偏移错误
+    compared = 0;
+
+    while (compared < kVerifyBytes) {
+      const na: number = fs.readSync(a.fd, va);
+      const nb: number = fs.readSync(b.fd, vb);
+      if (na !== nb) {
+        verdict = `长度不一致（src 读 ${na}，dst 读 ${nb}）`;
+        break;
+      }
+      if (na <= 0) {
+        break;
+      }
+      for (let i = 0; i < na; i++) {
+        if (ua[i] !== ub[i]) {
+          if (firstDiff < 0) {
+            firstDiff = compared + i;
+          }
+          break;
+        }
+      }
+      if (firstDiff >= 0) {
+        break;
+      }
+      compared += na;
+    }
+    fs.closeSync(a);
+    fs.closeSync(b);
+
+    if (verdict.length === 0) {
+      verdict = (firstDiff < 0) ? `前 ${compared}B 完全一致` : `首个不同字节在偏移 ${firstDiff}`;
+    }
+  } catch (e) {
+    verdict = `校验本身出错: ${err2str(e)}`;
+  }
+  console.info(`[import] 目标头部 ${dstHead}`);
+  console.info(`[import] 校验结果: ${verdict}（头部一致=${headEqual}）`);
+
+  if (copied === 0 || dstSize === 0) {
+    console.error('[import] ❌ 目标文件为 0 字节：拷贝没有写入任何数据');
+    return '';
+  }
+  if (copied !== dstSize) {
+    console.error(`[import] ❌ 写入字节数与目标大小不一致（copied=${copied} dst=${dstSize}）`);
+    return '';
+  }
+  if (firstDiff >= 0) {
+    console.error(`[import] ❌ 拷贝内容与源不一致（偏移 ${firstDiff}），文件已损坏，放弃分析`);
+    return '';
+  }
+
+  console.info('[import] ✅ 拷贝校验通过');
+  return destPath;
 }
+

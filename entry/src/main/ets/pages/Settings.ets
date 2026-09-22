@@ -234,6 +234,7 @@ export struct Settings {
               iconBg: ICON_BG_ORANGE,
               label: '关于应用',
               onTap: () => {
+                this.navPathStack.pushPathByName('Audio_test_page',null);
                 this.rowTap('关于应用');
               }
             })

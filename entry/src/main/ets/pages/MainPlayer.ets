@@ -76,12 +76,10 @@ struct MainPlayer {
 
   build(){
     HdsNavDestination(){
-      Row({space:10}) { //标题三栏
-        this.Column_UP(0);
-        this.Column_UP(1);
-        this.Column_UP(2);
+      Column(){
+
       }
-      .width("100%").justifyContent(FlexAlign.Center).padding({ top: $r('sys.float.single_line_titlebar_height') })
+
       Column() {
 
         Stack(){
