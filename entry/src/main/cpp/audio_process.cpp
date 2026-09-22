@@ -55,11 +55,32 @@ void audio_processor::load_audio(char file_path[]){
     //初始化编码器
     AVCodecParameters *codecParams = formatCtx->streams[audioStreamIdx]->codecpar;
     AVCodec *codec = avcodec_find_decoder(codecParams->codec_id);
+    if (codec == nullptr) {
+        OH_LOG_ERROR(LOG_APP, "avcodec_find_decoder 失败！codec_id=%{public}d（编码器未编进 .so）",
+                     static_cast<int>(codecParams->codec_id));
+        avformat_close_input(&formatCtx);
+        return;
+    }
     AVCodecContext *codecCtx = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(codecCtx, codecParams);
+    if (codecCtx == nullptr) {
+        OH_LOG_ERROR(LOG_APP, "avcodec_alloc_context3 失败");
+        avformat_close_input(&formatCtx);
+        return;
+    }
+    if (avcodec_parameters_to_context(codecCtx, codecParams) < 0) {
+        OH_LOG_ERROR(LOG_APP, "avcodec_parameters_to_context 失败");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return;
+    }
     
     //打开编码器
-    avcodec_open2(codecCtx,codec,NULL);
+    if (avcodec_open2(codecCtx, codec, NULL) < 0) {
+        OH_LOG_ERROR(LOG_APP, "avcodec_open2 失败！codec=%{public}s", codec->name ? codec->name : "?");
+        avcodec_free_context(&codecCtx);
+        avformat_close_input(&formatCtx);
+        return;
+    }
     
     /**读取数据包并解码为帧*/
     AVPacket *packet = av_packet_alloc();
@@ -88,8 +109,18 @@ void audio_processor::load_audio(char file_path[]){
     //释放资源并关闭解码器
     avcodec_close(codecCtx);
     avformat_close_input(&formatCtx);
-    
-    
+
+    OH_LOG_INFO(LOG_APP, "[decode] 完成: frames=%{public}d rate=%{public}d L=%{public}u R=%{public}u",
+                total_frame, sample_rate,
+                static_cast<unsigned int>(channel_l.size()),
+                static_cast<unsigned int>(channel_r.size()));
+}
+
+void audio_processor::release_buffers() {
+    std::vector<float>().swap(channel_l);
+    std::vector<float>().swap(channel_r);
+    std::vector<float>().swap(res);
+    file_path_ = nullptr;
 }
 
 void audio_processor::quickCheck() {

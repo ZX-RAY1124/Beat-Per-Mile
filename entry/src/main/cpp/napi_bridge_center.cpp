@@ -8,6 +8,7 @@
 #include <ohaudio/native_audiostreambuilder.h>
 #include <thread>
 #include "LiveStretchPlayer.h"
+#include "step_pipeline.hpp"   // 纯头：GaitSim → StepDetector → TempoFollower → 倍速
 #include <cstring>
 #include <algorithm>
 #include <atomic>
@@ -138,6 +139,17 @@ static music_data* dataClip = nullptr;
 static PlaybackRingBuffer g_ringBuffer(48000 * 2 * 2);   // 2秒立体声 PCM 容量 (192000 floats, 兼容44.1k~48k)
 static std::atomic<long long> g_lastCallbackMs;       //最后一次回调时间
 bool g_isPlaybackFinished = false;
+
+// ─── 步频管线（"模拟演示"源）────────────────────────────────────────────
+//   g_stepPipeline 是纯逻辑（可在宿主机单独验证）；
+//   线程、NAPI、以及"把倍速塞回播放链路"这几件事留在本文件。
+static steprun::StepPipeline g_stepPipeline;
+static std::mutex           g_stepMutex;          // 保护 g_stepPipeline（JS 线程读、步频线程写）
+static std::atomic<bool>    g_stepRunning{false};
+static std::thread          g_stepThread;
+// 当前正在播的播放器（由 WorkerThread 用 RAII 注册/注销），供管线读歌曲位置做回填
+static std::atomic<LiveStretchPlayer*> g_livePlayer{nullptr};
+static std::atomic<int>     g_liveSampleRate{48000};
 
 
 //自定义音频加载函数
@@ -710,6 +722,14 @@ static napi_value speedChange(napi_env env,napi_callback_info info){
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     napi_get_value_double(env, args[0], &speed);
+    // ★ 必须判空。dataClip 是播放线程里才建的对象，而解码 + 建引擎（要一次分配
+    //   零初始化几十 MB 的环形缓冲）可能要好几秒。上层（步频管线 / 界面滑条）
+    //   在起播后很快就会调到这里，那时 dataClip 还是 nullptr，
+    //   直接写 accelerate（结构体 offset = 8）就是 SIGSEGV @ 0x8。
+    if (dataClip == nullptr) {
+        OH_LOG_WARN(LOG_APP, "set speed %{public}fx ignored: dataClip not ready yet", speed);
+        return nullptr;
+    }
     dataClip->accelerate = speed;
     OH_LOG_INFO(LOG_APP, "set speed to %{public}fx", speed);
     return nullptr;
@@ -757,6 +777,15 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     //work
     audio_processor audio_processor;
     audio_processor.load_audio(filePath);            //音频位置
+
+    // ★ 解码失败必须在这里掉头：以前无论成败都继续往下走，把垃圾的
+    //   total_frame / sample_rate 拿去建环形缓冲和音频流，直接闪退。
+    if (audio_processor.total_frame <= 0 || audio_processor.sample_rate <= 0) {
+        OH_LOG_ERROR(LOG_APP, "[play] 解码失败，放弃播放: frames=%{public}d rate=%{public}d",
+                     audio_processor.total_frame, audio_processor.sample_rate);
+        clear(ctx);
+        return;
+    }
     AudioRendererInit(ctx->builder);                 //初始化（只建 builder）
 
     
@@ -806,10 +835,29 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     });
     
     player.loadAudio(audio_processor.make_planner_data(), audio_processor.total_frame);
+    // ★ 引擎已把数据拷进自己的环形缓冲（loadAudio 文档明确写了"调用后可以释放 data"），
+    //   这里把解码缓冲还掉：162s/48k/立体声约 186MB，不还的话峰值内存翻倍 ⇒ 模拟器容易 OOM。
+    audio_processor.release_buffers();
     OH_AudioRenderer_Start(ctx->renderer);                  //开始播放
 
     player.play();                                     //加载音频流
     g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
+
+    // ★ 把"当前正在播的播放器"暴露给步频管线，供它读歌曲位置（脚步回填用）。
+    //   用 RAII：WorkerThread 无论从哪条路径退出（自然结束 / cancel / 异常）
+    //   都会清掉这个指针 —— 原来 cancel 那条 continue→退出 的路径没有统一清理点。
+    //   析构顺序：liveReg 后声明先析构 ⇒ 指针先清、player 后销毁。
+    //   （仍有一个微秒级窗口：管线可能刚取到指针，player 就析构了；
+    //     演示阶段可接受，正式版应由会话对象统一持有。）
+    struct LivePlayerReg {
+        LivePlayerReg(LiveStretchPlayer* p, int sr) {
+            g_liveSampleRate.store(sr, std::memory_order_relaxed);
+            g_livePlayer.store(p, std::memory_order_release);
+        }
+        ~LivePlayerReg() { g_livePlayer.store(nullptr, std::memory_order_release); }
+    };
+    LivePlayerReg liveReg(&player, audio_processor.sample_rate);
+
     //播放器循环
     while(!finished && !quit){
         player.setSpeed(dataClip->accelerate);
@@ -850,6 +898,12 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
             
             
         }
+        // ★ 这里必须让出 CPU。原版是**无 sleep 的忙等**：播放期间这个循环会吃满一个核，
+        //   音频生产线程（LiveStretchPlayer::audioLoop）和声卡回调抢不到时间片时，
+        //   输出环形缓冲会被读空 —— 听感就是"偶尔空一下"（process() 里那段补零）。
+        //   倍速是按"步频"的节奏变的（≤几 Hz），50Hz 轮询绰绰有余。
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
         /*
         if(nowMs() - last >= 200){
             last = nowMs();
@@ -1014,6 +1068,13 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
                                     nullptr,
                                     CallJSCallback,       //主线程真正的回调
                                     &ctx->tsfn);
+    // ★ 在**主线程（JS 线程）**先把 dataClip 建好：music_play 一返回，
+    //   上层任何 changeSpeed 都不会再撞上 nullptr（判空仍在，作为第二道防线）。
+    //   播放线程里那次创建保留作兜底。
+    if (dataClip == nullptr) {
+        dataClip = new music_data();
+    }
+
     ctx->worker = std::thread(WorkerThread, ctx, buf);
     OH_LOG_INFO(LOG_APP, "Add sub thread");
     ctx->worker.detach();
@@ -1029,6 +1090,127 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
 
 
 //注册函数，告诉系统有一个叫add的函数
+// ════════════════════════════════════════════════════════════════════════
+//  步频管线（模拟演示源）
+//
+//    stepPipelineStart(scenario, songBpm, firstBeat)
+//        → 起一条 50Hz 线程：GaitSim → StepDetector → TempoFollower
+//        → 倍速 → dataClip->accelerate
+//    WorkerThread 每轮读 dataClip->accelerate 并 player.setSpeed()，
+//    倍速就这样驱动了真实播放。
+//
+//    「真实传感器」那条路以后只需把"喂样"换成 ArkTS 上报的三轴，
+//    管线本身（回填 / 跟随 / 限幅）一行都不用动。
+// ════════════════════════════════════════════════════════════════════════
+
+static std::string stepStatusJson() {
+    std::lock_guard<std::mutex> lk(g_stepMutex);
+    const steprun::Status st = g_stepPipeline.status();
+    std::ostringstream os;
+    os << "{\"running\":" << (g_stepRunning.load() ? "true" : "false")
+       << ",\"cadenceSpm\":" << st.cadenceSpm
+       << ",\"multiplier\":" << st.multiplier
+       << ",\"targetBpm\":" << st.targetBpm
+       << ",\"steps\":" << static_cast<unsigned long long>(st.steps)
+       << ",\"followState\":" << st.followState
+       << ",\"lastStepSec\":" << st.lastStepSec
+       << ",\"songSec\":" << st.songSec
+       << ",\"hasPlayer\":" << (g_livePlayer.load() != nullptr ? "true" : "false")
+       << "}";
+    return os.str();
+}
+
+static void StepWorkerThread() {
+    const double dt = 1.0 / 50.0;          // 与 GaitSim 的 sample_rate_hz 一致
+    while (g_stepRunning.load(std::memory_order_relaxed)) {
+        // 读当前歌曲位置（秒）。没有在播就是 0，跟随器会自然退回纯调速。
+        double songPos = 0.0;
+        LiveStretchPlayer* pl = g_livePlayer.load(std::memory_order_acquire);
+        if (pl != nullptr) {
+            const int sr = g_liveSampleRate.load(std::memory_order_relaxed);
+            if (sr > 0) {
+                songPos = static_cast<double>(pl->getInputPosition()) / static_cast<double>(sr);
+            }
+        }
+
+        double mult = 1.0;
+        {
+            std::lock_guard<std::mutex> lk(g_stepMutex);
+            g_stepPipeline.tick(dt, songPos);
+            mult = g_stepPipeline.status().multiplier;
+        }
+
+        // 把倍速塞进现有播放链路：WorkerThread 每轮读 accelerate 并 player.setSpeed()。
+        // 判空是必须的：dataClip 由 WorkerThread 创建，这里可能还没有。
+        if (dataClip != nullptr) {
+            dataClip->accelerate = mult;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+static napi_value stepPipelineStart(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    int32_t scenario = 0;
+    double songBpm = 150.0;
+    double firstBeat = 0.0;
+    if (argc >= 1) napi_get_value_int32(env, args[0], &scenario);
+    if (argc >= 2) napi_get_value_double(env, args[1], &songBpm);
+    if (argc >= 3) napi_get_value_double(env, args[2], &firstBeat);
+
+    if (g_stepRunning.load()) {
+        OH_LOG_INFO(LOG_APP, "[step] already running, ignore start");
+        return nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_stepMutex);
+        g_stepPipeline.setScenario(scenario);
+        g_stepPipeline.reset();
+        g_stepPipeline.setSong(songBpm, firstBeat);   // reset 之后再设歌，避免被清掉
+    }
+    g_stepRunning.store(true);
+    g_stepThread = std::thread(StepWorkerThread);
+    OH_LOG_INFO(LOG_APP, "[step] started: scenario=%{public}d songBpm=%{public}.1f firstBeat=%{public}.2f",
+                scenario, songBpm, firstBeat);
+    return nullptr;
+}
+
+static napi_value stepPipelineStop(napi_env env, napi_callback_info info) {
+    (void)env;
+    (void)info;
+    if (g_stepRunning.load()) {
+        g_stepRunning.store(false);
+        if (g_stepThread.joinable()) {
+            g_stepThread.join();
+        }
+        OH_LOG_INFO(LOG_APP, "[step] stopped");
+    }
+    return nullptr;
+}
+
+static napi_value stepPipelineSetScenario(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t scenario = 0;
+    if (argc >= 1) napi_get_value_int32(env, args[0], &scenario);
+    std::lock_guard<std::mutex> lk(g_stepMutex);
+    g_stepPipeline.setScenario(scenario);
+    return nullptr;
+}
+
+static napi_value stepPipelineStatus(napi_env env, napi_callback_info info) {
+    (void)info;
+    const std::string s = stepStatusJson();
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, s.c_str(), s.size(), &out);
+    return out;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports)
 {
@@ -1047,7 +1229,12 @@ static napi_value Init(napi_env env, napi_value exports)
         // ★ App 请用这个：异步，不阻塞主线程，且会回传 BPM / 失败原因
         {"analyzeMusicAsync", nullptr, analyzeMusicAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         // 轮询分析进度：返回 JSON 字符串 {phase,pct,elapsedMs,running,error}
-        {"getAnalyseStatus", nullptr, GetAnalyseStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"getAnalyseStatus", nullptr, GetAnalyseStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // ★ 步频管线（模拟演示源）：起 / 停 / 换场景 / 查状态(JSON)
+        {"stepPipelineStart", nullptr, stepPipelineStart, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stepPipelineStop", nullptr, stepPipelineStop, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stepPipelineSetScenario", nullptr, stepPipelineSetScenario, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stepPipelineStatus", nullptr, stepPipelineStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

@@ -35,3 +35,15 @@ export const analyzeMusicAsync: (path: string,
  * 建议 setInterval 每 300~500ms 调一次，done/failed 时停掉定时器。
  */
 export const getAnalyseStatus: () => string;
+/**
+ * 步频管线（模拟演示源）：起一条 50Hz 原生线程
+ *   GaitSim 合成三轴 → StepDetector 计步 → TempoFollower 算倍速 → 驱动播放
+ * @param scenario 模拟场景序号（0 跑步160 / 1 跑步200 / 2 跑步120→200 / 3 跑20s停8s / 4 步行108 / 5 站立不动）
+ * @param songBpm 当前歌曲 BPM（倍速 = 步频 / 歌曲BPM）
+ * @param firstBeatSec 歌曲第一拍时间（秒）
+ */
+export const stepPipelineStart: (scenario: number, songBpm: number, firstBeatSec: number) => void;
+export const stepPipelineStop: () => void;
+export const stepPipelineSetScenario: (scenario: number) => void;
+/** 返回 JSON 字符串：{running,cadenceSpm,multiplier,targetBpm,steps,followState,lastStepSec,songSec,hasPlayer} */
+export const stepPipelineStatus: () => string;

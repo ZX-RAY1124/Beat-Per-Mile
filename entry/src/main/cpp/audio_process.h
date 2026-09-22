@@ -21,17 +21,22 @@ private:
     std::vector<float> res;
     void process_audio(AVFrame *frame);
     void channel_split(int channel, float data);
-    bool openfail;
-    bool loadfail;
-    char *file_path_;
+    bool openfail = false;
+    bool loadfail = false;
+    char *file_path_ = nullptr;
     void quickCheck();
 public:
     audio_processor();
     std::vector<float> channel_r;
     std::vector<float> channel_l;
-    int total_frame;
-    int sample_rate;
+    // ★ 必须初始化：这个对象建在栈上，不初始化就是垃圾值。
+    //   total_frame 会被当作播放器环形缓冲大小 —— 垃圾值偏大 ⇒ 一次分配几个 GB
+    //   ⇒ std::bad_alloc（未捕获）⇒ terminate ⇒ 闪退。
+    int total_frame = 0;
+    int sample_rate = 0;
     void load_audio(char file_path[]);
+    /** 释放解码缓冲。引擎 loadAudio() 已把数据拷走后调用，可省约 186MB 峰值内存 */
+    void release_buffers();
     
     float* make_planner_data();
 };

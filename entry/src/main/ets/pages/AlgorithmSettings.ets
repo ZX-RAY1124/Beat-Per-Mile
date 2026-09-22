@@ -1,5 +1,14 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { SettingRow } from './Settings';
+import {
+  SOURCE_SIM,
+  STEP_SCENARIOS,
+  StepScenario,
+  getStepScenario,
+  getStepSource,
+  setStepScenario,
+  setStepSource
+} from '../ets_libs/StepSource';
 
 /**
  * 算法参数设置页（设置页 →「算法参数设置」进来）
@@ -22,6 +31,7 @@ import { SettingRow } from './Settings';
 const ACCENT: string = '#FF6B6B';
 const TEXT_PRIMARY: string = '#1B1B2F';
 const TEXT_SECONDARY: string = '#8A8F99';
+const TEXT_TERTIARY: string = '#C4C8D0';
 const PAGE_BG: string = '#F5F6F8';
 const CARD_BG: string = '#FFFFFF';
 const FIELD_BG: string = '#F2F3F7';
@@ -41,6 +51,9 @@ const ICON_BG_ORANGE: string = '#FFF3E9';
 const ENGINE_LABELS: string[] = ['SignalSmith Stretch', '系统Audio Kit'];
 /** 默认选中项（还没有落盘，以后从 preferences 读） */
 const ENGINE_DEFAULT: number = 0;
+
+/** 步数检测源的分段标签（顺序对应 StepSource 的 SOURCE_REAL / SOURCE_SIM） */
+const SOURCE_LABELS: string[] = ['真实传感器', '模拟演示'];
 
 /** 分段控件尺寸 */
 const SEG_PAD: number = 3;    // 灰色轨道的内边距
@@ -73,11 +86,24 @@ struct AlgorithmSettings {
    */
   @State trackW: number = 0;
 
+  /** 步数检测源（StepSource.SOURCE_REAL / SOURCE_SIM） */
+  @State stepSource: number = SOURCE_SIM;
+  /** 模拟场景下标（见 StepSource.STEP_SCENARIOS） */
+  @State stepScenario: number = 0;
+  /** 步数检测源那个分段控件的轨道宽度（同样要等布局量出来） */
+  @State trackWSource: number = 0;
+
+  aboutToAppear(): void {
+    this.stepSource = getStepSource();
+    this.stepScenario = getStepScenario();
+  }
+
   build() {
     HdsNavDestination() {
       Scroll() {
         Column({ space: 16 }) {
           this.EngineCard()
+          this.StepSourceCard()
           this.ParamGroup()
         }
         .width('100%')
@@ -161,6 +187,146 @@ struct AlgorithmSettings {
     .onAreaChange((oldArea: Area, newArea: Area) => {
       this.trackW = lengthToVp(newArea.width);
     })
+  }
+
+  // ==================== 步数检测源 ====================
+
+  /**
+   * 步数检测源卡片：真实传感器 / 模拟演示
+   *
+   * 选「模拟演示」后，播放器页会启动 native 的合成步态管线
+   * （GaitSim → StepDetector → TempoFollower → 倍速 → 实际播放），
+   * 这样没有真机传感器也能端到端验证"从检测步数到音乐变速"。
+   */
+  @Builder
+  StepSourceCard() {
+    Column({ space: 12 }) {
+      Text('步数检测源')
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(TEXT_PRIMARY)
+        .width('100%')
+
+      this.SourceSwitch()
+
+      if (this.stepSource === SOURCE_SIM) {
+        Text('模拟场景')
+          .fontSize(13)
+          .fontColor(TEXT_SECONDARY)
+          .width('100%')
+
+        Column() {
+          ForEach(STEP_SCENARIOS, (sc: StepScenario, index: number) => {
+            this.ScenarioRow(sc, index)
+          }, (sc: StepScenario) => sc.name)
+        }
+        .width('100%')
+
+        Text('模拟源由 native 合成，不读真实传感器；算出的倍速会实际驱动播放。')
+          .fontSize(11)
+          .fontColor(TEXT_TERTIARY)
+          .width('100%')
+      } else {
+        Text('真实传感器（加速度计）尚未接线，选它暂时不会有步频数据。')
+          .fontSize(11)
+          .fontColor(TEXT_TERTIARY)
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(CARD_BG)
+    .borderRadius(18)
+    .shadow({ radius: 14, color: '#14000000', offsetX: 0, offsetY: 4 })
+  }
+
+  /** 两段分段控件：[ 真实传感器 | 模拟演示 ]，与上面变速算法同一套做法 */
+  @Builder
+  SourceSwitch() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column()
+        .width(this.sourceSegWidth())
+        .height(SEG_H)
+        .borderRadius(PILL_RADIUS)
+        .backgroundColor(Color.White)
+        .shadow({ radius: 6, color: '#14000000', offsetX: 0, offsetY: 1 })
+        .offset({ x: this.stepSource * (this.sourceSegWidth() + SEG_GAP) })
+
+      Row({ space: SEG_GAP }) {
+        ForEach(SOURCE_LABELS, (label: string, index: number) => {
+          Text(label)
+            .fontSize(SEG_TEXT_SIZE)
+            .fontWeight(this.stepSource === index ? FontWeight.Medium : FontWeight.Normal)
+            .fontColor(this.stepSource === index ? ACCENT : TEXT_SECONDARY)
+            .textAlign(TextAlign.Center)
+            .maxLines(2)
+            .width(this.sourceSegWidth())
+            .height(SEG_H)
+            .onClick(() => {
+              this.switchSource(index);
+            })
+        }, (label: string) => label)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(SEG_PAD)
+    .backgroundColor(FIELD_BG)
+    .borderRadius(SEG_RADIUS)
+    .onAreaChange((oldArea: Area, newArea: Area) => {
+      this.trackWSource = lengthToVp(newArea.width);
+    })
+  }
+
+  /** 一条模拟场景（选中打勾）。图标沿用工程里已验证过的 sys.symbol.* */
+  @Builder
+  ScenarioRow(sc: StepScenario, index: number) {
+    Row({ space: 10 }) {
+      SymbolGlyph(this.stepScenario === index
+        ? $r('sys.symbol.checkmark_square_fill')
+        : $r('sys.symbol.square'))
+        .fontSize(18)
+        .fontColor([this.stepScenario === index ? ACCENT : TEXT_TERTIARY])
+
+      Column({ space: 2 }) {
+        Text(sc.name)
+          .fontSize(14)
+          .fontColor(TEXT_PRIMARY)
+          .width('100%')
+        Text(sc.desc)
+          .fontSize(11)
+          .fontColor(TEXT_SECONDARY)
+          .width('100%')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding({ top: 8, bottom: 8 })
+    .onClick(() => {
+      this.selectScenario(index);
+    })
+  }
+
+  /** 步数检测源控件的单段宽度 */
+  private sourceSegWidth(): number {
+    const inner: number = this.trackWSource - SEG_PAD * 2 - SEG_GAP * (SOURCE_LABELS.length - 1);
+    return inner > 0 ? inner / SOURCE_LABELS.length : 0;
+  }
+
+  private switchSource(index: number): void {
+    if (index === this.stepSource) {
+      return;
+    }
+    setStepSource(index);
+    this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
+      this.stepSource = index;
+    });
+  }
+
+  private selectScenario(index: number): void {
+    setStepScenario(index);
+    this.stepScenario = index;
   }
 
   /** 单段宽度：轨道内容宽减去段间距后均分（轨道还没量出来时先返回 0） */
