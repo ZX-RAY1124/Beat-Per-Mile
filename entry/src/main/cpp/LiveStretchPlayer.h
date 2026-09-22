@@ -239,6 +239,27 @@ public:
         engine_.setSpeed(speed);
     }
 
+    /**
+     * @brief 后台音频线程是否还在跑。
+     *
+     * audioLoop 在 process() 返回 0（数据耗尽）时会自行把 running_ 置 false 并退出。
+     * ★ 用它判断"自然播完"比"500ms 没有回调"这类时间启发式可靠得多 ——
+     *   后者在暂停/恢复、卡顿、声卡异常时都会误判。
+     * 注意：暂停不会把它置 false（暂停时线程仍在循环），所以暂停中它仍是 true。
+     */
+    bool isRunning() const { return running_.load(std::memory_order_relaxed); }
+
+    /**
+     * @brief 注册"音频线程刚启动时"执行的回调（可选）。
+     *
+     * ★ 用途是**平台相关的线程优先级提升**。本类刻意保持平台无关（不 include 任何
+     *   系统头），所以平台调用交给上层：
+     *       player.setThreadStartCallback([]{ OH_QoS_SetThreadQoS(QOS_USER_INTERACTIVE); });
+     *   否则这个生产线程很容易被 UI/JS 线程抢走时间片，输出环形缓冲被声卡读空
+     *   ⇒ underrun（掉音）。
+     */
+    void setThreadStartCallback(std::function<void()> cb) { threadStartCb_ = cb; }
+
     // ==================== 数据回调注册 ====================
 
     /**
@@ -278,6 +299,10 @@ private:
 
     // ---------- 后台线程主循环 ----------
     void audioLoop() {
+        // 先给上层一个提升本线程优先级的机会（平台相关，见 setThreadStartCallback）
+        if (threadStartCb_) {
+            threadStartCb_();
+        }
         // 准备输出指针（平面格式，避免每次循环重新分配）
         std::vector<float*> outputPtrs(channels_);
         // 使用高精度时钟驱动
@@ -349,6 +374,7 @@ private:
     std::thread workThread_;                ///< 后台工作线程
 
     std::function<void(const float* data, int frames, int channels)> audioCallback_; ///< 数据回调
+    std::function<void()> threadStartCb_;   ///< 音频线程启动钩子（平台优先级提升用）
 
     const float* sourceData_ = nullptr;    ///< 源数据借用指针（seek 时重新喂入用）
     long long sourceFrames_ = 0;           ///< 源数据总帧数（64 位）

@@ -9,6 +9,7 @@
 #include <thread>
 #include "LiveStretchPlayer.h"
 #include "step_pipeline.hpp"   // 纯头：GaitSim → StepDetector → TempoFollower → 倍速
+#include <qos/qos.h>             // OH_QoS_SetThreadQoS：把音频生产线程提到交互级
 #include <cstring>
 #include <algorithm>
 #include <atomic>
@@ -136,7 +137,9 @@ static std::mutex g_mapMutex;
 static std::mutex g_dataMutex;                        // 保护 dataClip & ring buffer 并发访问
 static int g_nextId = 1; 
 static music_data* dataClip = nullptr;
-static PlaybackRingBuffer g_ringBuffer(48000 * 2 * 2);   // 2秒立体声 PCM 容量 (192000 floats, 兼容44.1k~48k)
+// ★ 6 秒（原来是 2 秒）：给生产端留更多抗调度抖动余量。
+//   生产线程偶尔被抢走时间片时，2 秒的余量会被读空 ⇒ underrun（掉音）。
+static PlaybackRingBuffer g_ringBuffer(48000 * 2 * 6);   // 6秒立体声 PCM 容量 (576000 floats)
 static std::atomic<long long> g_lastCallbackMs;       //最后一次回调时间
 bool g_isPlaybackFinished = false;
 
@@ -829,7 +832,26 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     OH_AudioStreamBuilder_GenerateRenderer(ctx->builder, &ctx->renderer);   
     
     //===========LiveStretchPlayer==============
-    LiveStretchPlayer player(2, audio_processor.sample_rate, audio_processor.total_frame, 1.0, 512);
+    // 块大小 512 → 1024：唤醒次数减半，对调度抖动更耐受（代价是输出延迟 11ms → 21ms）
+    LiveStretchPlayer player(2, audio_processor.sample_rate, audio_processor.total_frame, 1.0, 1024);
+
+    // ★ 把音频生产线程提到交互级。否则它和 UI/JS/管线线程抢 CPU 时会被压后，
+    //   声卡回调就取不到数据（日志里的 "underrun: need N, got 0"）。
+    player.setThreadStartCallback([]() {
+        // QoS 分级尝试：QOS_USER_INTERACTIVE 在非"驻留应用"上可能被拒（实测 ret=-1），
+        // 依次降级，用第一个成功的。全失败也只是少一层保险（-O2 + 6 秒缓冲才是主力）。
+        static const QoS_Level kLevels[3] = {
+            QOS_USER_INTERACTIVE, QOS_DEADLINE_REQUEST, QOS_USER_INITIATED
+        };
+        for (int i = 0; i < 3; ++i) {
+            const int qr = OH_QoS_SetThreadQoS(kLevels[i]);
+            if (qr == 0) {
+                OH_LOG_INFO(LOG_APP, "[play] 音频线程 QoS 提升成功: level=%{public}d", static_cast<int>(kLevels[i]));
+                return;
+            }
+        }
+        OH_LOG_WARN(LOG_APP, "[play] 音频线程 QoS 各级都被拒，靠 -O2 + 缓冲余量兜底");
+    });
     if (dataClip == nullptr) {
         dataClip = new music_data();
     }
@@ -913,6 +935,13 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
                 break;
             }
             player.pause();
+            // ★ 暂停期间也必须刷新"最后一次回调时间"。
+            //   暂停时渲染器 Pause + setSilenceOnPause(false) ⇒ 回调完全停止，
+            //   这个时间戳会停在暂停前的那一刻。恢复播放后第一次循环里，
+            //   下面那段「500ms 没回调就算播完」就会拿暂停前的旧时间戳比较
+            //   ⇒ 立刻误判播放结束 ⇒ 停渲染器 ⇒ 全程静音。
+            //   症状就是"暂停一会儿再播放，响一下就没了"。
+            g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);
             std::this_thread::sleep_for(std::chrono::milliseconds(10));       //停止忙等，释放
         }
         player.resume();
@@ -924,10 +953,15 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
 
         if(!finished && !quit){
-            //判断结束
-            //finished = true;
-            if (last > 0 && !ctx->paused.load() &&
-                (nowMs() - last) > 500) {    // 自然结束检测：未暂停且超过 500ms 没有回调 => 播放结束
+            // ★ 首选判据：引擎自己的音频线程已经退出 ⇒ 数据确实放完了。
+            //   这比"500ms 没有回调"这种时间启发式可靠（后者在恢复播放、卡顿、
+            //   声卡异常时都会误判，之前的"暂停后响一下就没声"就是这么来的）。
+            const bool drained = !player.isRunning();
+            // 兜底：未暂停但长时间没有回调（正常路径下不再需要）
+            const bool silentTooLong = (last > 0) && !ctx->paused.load() && ((nowMs() - last) > 500);
+            if (drained || silentTooLong) {
+                OH_LOG_INFO(LOG_APP, "[play] 播放结束 (drained=%{public}d silent=%{public}d)",
+                            drained ? 1 : 0, silentTooLong ? 1 : 0);
                 finished = true;
                 break;
             }
@@ -1019,6 +1053,10 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
         }
     }
     
+    // ★ 恢复播放时把"最后回调时间"刷新到现在：给自然结束检测一个干净的时间基准
+    //   （否则它会拿暂停前的旧时间戳来比，暂停超过 0.5 秒就会误判为已播完）
+    g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);
+
     // 最后启动 AudioRenderer（此时环形缓冲区已有数据，避免 underrun）
     if (OH_AudioRenderer* r = rendererForId(id)) {
         OH_AudioRenderer_Start(r);
