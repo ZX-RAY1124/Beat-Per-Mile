@@ -172,6 +172,23 @@ static std::atomic<int>       g_playRate{0};
 static std::mutex             g_playErrMx;
 static std::string            g_playErr;
 
+// ─── 编译优化自检 ─────────────────────────────────────────────────────
+//   -O0 下 signalsmith-stretch 达不到实时（生产线程跟不上声卡 ⇒ underrun 掉音）。
+//   __OPTIMIZE__ 是编译器**只在 -O1 及以上**才定义的宏，所以这一行能从
+//   "跑在设备上的这个 .so 里"直接证明优化有没有开 —— 不用去猜构建配置，
+//   也不会被"改了 CMakeLists 但没重新编"骗到。
+//   ⚠️ 必须定义在 musicPlay / Init 之前（它们都要调）。
+static void logBuildOptimization() {
+#if defined(__OPTIMIZE__)
+    OH_LOG_INFO(LOG_APP, "[build] 优化已开启 (__OPTIMIZE__ 已定义)：音频 DSP 可实时");
+#else
+    OH_LOG_WARN(LOG_APP,
+        "[build] 未开优化(-O0)：音频 DSP 跟不上，会 underrun 掉音。"
+        "请在 CMakeLists 给 target 加 -O2");
+#endif
+}
+
+
 
 //自定义音频加载函数
 static OH_AudioData_Callback_Result OnWriteData_New(
@@ -1099,6 +1116,7 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
 
 static napi_value musicPlay(napi_env env, napi_callback_info info){
     OH_LOG_INFO(LOG_APP, "[NAPI] Now loading music play");
+    logBuildOptimization();
     size_t argc = 2;
     napi_value args[2] = {nullptr};
     napi_value jsCallback = nullptr;
@@ -1349,6 +1367,7 @@ EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports)
 {
     OH_LOG_INFO(LOG_APP, "Init called!");
+    logBuildOptimization();
     napi_property_descriptor desc[] = {
                 // { "add" 是 ArkTS 侧调用时用的名字, Add 是上面的 C++ 函数 }
         {"add", nullptr, Add, nullptr, nullptr, nullptr, napi_default, nullptr },
