@@ -47,3 +47,11 @@ export const stepPipelineStop: () => void;
 export const stepPipelineSetScenario: (scenario: number) => void;
 /** 返回 JSON 字符串：{running,cadenceSpm,multiplier,targetBpm,steps,followState,lastStepSec,songSec,hasPlayer} */
 export const stepPipelineStatus: () => string;
+/**
+ * 查询原生播放状态。返回 JSON 字符串：
+ *   {"ok":boolean,"state":"idle|loading|ready|failed|gone","frames":number,
+ *    "rate":number,"posSec":number,"error":string}
+ * 用途：① 显示「加载中…」而不是干等；② 显示解码失败原因（以前是静默的）；
+ *       ③ 用 posSec 回填真实播放位置，修正页面自积分造成的拍相位漂移。
+ */
+export const musicGetStatus: (id: number) => string;

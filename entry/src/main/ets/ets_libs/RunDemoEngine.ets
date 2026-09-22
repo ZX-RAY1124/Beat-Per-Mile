@@ -64,6 +64,52 @@ interface SongDataRaw {
   segments?: SongSegment[];
 }
 
+/** 曲库里的一个条目。key 是它在 json 里的键（约定用文件名） */
+export interface SongEntry {
+  key: string;
+  song: SongData;
+}
+
+/**
+ * 多曲库的宽松根类型：
+ *   · 新格式：顶层就是一个以"标识"为键的**字典**  { "a.wav": {filename,segments}, … }
+ *   · 旧格式：顶层直接是单曲 {filename, filedir, segments}（保留兼容）
+ * ⚠️ 刻意**不做** "songs": { … } 那种"可能是数组也可能是字典"的联合类型 ——
+ *    ArkTS 对联合类型 + 动态键不友好，容易编不过。
+ */
+interface SongRootRaw {
+  songs?: SongDataRaw[];
+  filename?: string;
+  filedir?: string;
+  segments?: SongSegment[];
+}
+
+/** 「当前歌曲」记在 AppStorage 里（跨页面/重进页面都记得） */
+export const SONG_KEY_STORAGE: string = 'currentSongKey';
+
+export function getCurrentSongKey(): string {
+  const v: string | undefined = AppStorage.get<string>(SONG_KEY_STORAGE);
+  return v === undefined ? '' : v;
+}
+
+export function setCurrentSongKey(k: string): void {
+  AppStorage.setOrCreate<string>(SONG_KEY_STORAGE, k);
+}
+
+/** 把宽松的 JSON 单曲归一化成 SongData；没有有效 segments 就返回 null */
+function normalizeSong(raw: SongDataRaw): SongData | null {
+  const segs: SongSegment[] = (raw.segments !== undefined && raw.segments.length > 0) ? raw.segments : [];
+  if (segs.length === 0) {
+    return null;
+  }
+  const song: SongData = {
+    filename: raw.filename !== undefined ? raw.filename : '',
+    filedir: raw.filedir !== undefined ? raw.filedir : '',
+    segments: segs
+  };
+  return song;
+}
+
 /** 曲线一段：运动时间（秒）→ 目标步频 */
 export interface CurveStage {
   atSec: number;
@@ -102,12 +148,33 @@ export function mediaDir(ctx: common.UIAbilityContext): string {
   return ctx.filesDir + '/' + MEDIA_DIR;
 }
 
+/** 把一组单曲塞进曲库。key 用文件名；没有文件名就用序号 */
+function pushSongs(out: SongEntry[], list: SongDataRaw[]): void {
+  for (let i = 0; i < list.length; i++) {
+    const one: SongData | null = normalizeSong(list[i]);
+    if (one === null) {
+      continue;
+    }
+    const key: string = one.filename.length > 0 ? one.filename : ('song#' + i.toString());
+    out.push({ key: key, song: one });
+  }
+}
+
 /**
- * 读 song_data.json。读不到/格式不对返回 null，页面用演示数据兜底。
- * ⚠️ 协作者的示例里带尾逗号（"firstbeat":0,），标准 JSON.parse 会直接抛，
- *    所以这里先把「逗号紧跟 } 或 ]」的尾逗号去掉再解析。
+ * 读 song_data.json —— **整库**。
+ *
+ * 约定格式（一层列表，顶层直接是数组）：
+ *   [ { "filename":"a.wav", "filedir":"…", "segments":[ … ] }, { … } ]
+ *
+ * 另外两种也认，省得上层写法变来变去：
+ *   ·  { "songs": [ … ] }                    —— 外面多包一层
+ *   ·  { "filename":…, "segments":[ … ] }    —— 旧的单曲平铺格式
+ *
+ * 读不到 / 解析失败返回空数组（页面用演示数据兜底）。
+ * ⚠️ 文件里若带尾逗号（"firstbeat":0,），标准 JSON.parse 会直接抛，
+ *    所以先把「逗号紧跟 } 或 ]」的尾逗号去掉再解析。
  */
-export function loadSongData(ctx: common.UIAbilityContext): SongData | null {
+export function loadSongDatabase(ctx: common.UIAbilityContext): SongEntry[] {
   const dir: string = mediaDir(ctx);
   // 顺手确保 Media 目录存在：设备文件管理器/后续的歌曲导入都需要它有地方放文件，
   // 也让调试区显示的 filesDir 与实际可用路径一致。
@@ -118,28 +185,51 @@ export function loadSongData(ctx: common.UIAbilityContext): SongData | null {
   } catch (e) {
     console.error('创建 Media 目录失败：' + JSON.stringify(e));
   }
+
   const path: string = dir + '/' + SONG_DATA_NAME;
+  const out: SongEntry[] = [];
   try {
     if (!fileIo.accessSync(path)) {
-      return null;
+      return out;
     }
     let text: string = fileIo.readTextSync(path);
     text = text.replace(new RegExp(',\\s*([}\\]])', 'g'), '$1');
-    const raw: SongDataRaw = JSON.parse(text) as SongDataRaw;
-    const segs: SongSegment[] = (raw.segments !== undefined && raw.segments.length > 0) ? raw.segments : [];
-    if (segs.length === 0) {
-      return null;
+
+    // ---- 形式 A：顶层直接是列表（约定格式）----
+    //   静态类型写成数组，但**是不是数组只有运行期知道**，所以必须 Array.isArray 判一下。
+    const asList: SongDataRaw[] = JSON.parse(text) as SongDataRaw[];
+    if (Array.isArray(asList)) {
+      pushSongs(out, asList);
+      return out;
     }
-    const song: SongData = {
-      filename: raw.filename !== undefined ? raw.filename : '',
-      filedir: raw.filedir !== undefined ? raw.filedir : '',
-      segments: segs
-    };
-    return song;
+
+    // ---- 形式 B / C：顶层是对象 ----
+    const asObj: SongRootRaw = JSON.parse(text) as SongRootRaw;
+    if (asObj.songs !== undefined && Array.isArray(asObj.songs)) {
+      pushSongs(out, asObj.songs);
+      return out;
+    }
+    if (asObj.segments !== undefined) {
+      const single: SongDataRaw = {
+        filename: asObj.filename,
+        filedir: asObj.filedir,
+        segments: asObj.segments
+      };
+      const one: SongData | null = normalizeSong(single);
+      if (one !== null) {
+        out.push({ key: one.filename.length > 0 ? one.filename : 'song', song: one });
+      }
+    }
   } catch (e) {
     console.error('读取 song_data.json 失败：' + JSON.stringify(e));
-    return null;
   }
+  return out;
+}
+
+/** 兼容旧调用：取曲库第一首；空库返回 null */
+export function loadSongData(ctx: common.UIAbilityContext): SongData | null {
+  const db: SongEntry[] = loadSongDatabase(ctx);
+  return db.length > 0 ? db[0].song : null;
 }
 
 /** song_data.json 指向的音频，在沙箱里的完整路径 */
@@ -184,6 +274,8 @@ export class RunDemoEngine {
   /** 外部倍速（<0 = 不用）。动态模式接上 native 步频管线后，倍速由管线给，
    *  这里只是让进度条/光效按真实倍速前进。 */
   private externalSpeedV: number = -1;
+  /** 原生音频就绪标志；false 时冻结位置推进（见 setAudioReady） */
+  private audioReadyV: boolean = true;
 
   constructor() {
     // 内置演示曲线：热身 → 目标 → 放松（运动时间轴，秒）
@@ -247,6 +339,32 @@ export class RunDemoEngine {
   /** 取消外部倍速，回到本引擎自己算 */
   clearExternalSpeed(): void {
     this.externalSpeedV = -1;
+  }
+
+  /**
+   * 原生音频是否已就绪。
+   * ★ false 时**冻结**歌曲位置与运动时钟 —— 否则起播后那几秒"解码+建缓冲"里，
+   *   页面位置会自己空走好几秒，等真出声时相位早就对不上了。
+   */
+  setAudioReady(b: boolean): void {
+    this.audioReadyV = b;
+  }
+
+  /**
+   * 用原生回报的**真实**歌曲位置把估算值拉回来。
+   * 这是修"页面拍相位 vs 真实歌曲相位漂移"的关键一步：
+   * 页面不再纯靠 dt×倍速 积分，而是周期性以真实位置为准。
+   */
+  syncPosition(sec: number): void {
+    if (!(sec >= 0)) {
+      return;
+    }
+    let p: number = sec;
+    if (this.durSecV > 0) {
+      p = p % this.durSecV;
+    }
+    this.posSecV = p;
+    this.beatIndexV = -1;
   }
 
   getMode(): number { return this.modeV; }
@@ -318,7 +436,8 @@ export class RunDemoEngine {
     }
 
     // ---- 1) 进度：歌曲位置按倍速前进（歌曲原速时间轴）----
-    if (this.playingV) {
+    //   ★ 必须等原生音频就绪，否则加载那几秒会空走
+    if (this.playingV && this.audioReadyV) {
       this.posSecV += dtSec * this.speedV;
       if (this.durSecV > 0) {
         while (this.posSecV >= this.durSecV) {
@@ -333,7 +452,7 @@ export class RunDemoEngine {
 
     // ---- 2) 模拟实测步频（临时；真机是 step_detector 的输出）----
     const rampA: number = 1 - Math.exp(-dtSec / TAU_CADENCE);
-    const rampTarget: number = this.playingV ? 1 : 0;
+    const rampTarget: number = (this.playingV && this.audioReadyV) ? 1 : 0;
     this.cadenceRamp += rampA * (rampTarget - this.cadenceRamp);
     // 确定性生理抖动：同一段演示每次重放都一样，方便比对
     const wob: number = Math.sin(this.workoutSecV * 0.9) * 3.0 + Math.sin(this.workoutSecV * 2.7) * 1.5;

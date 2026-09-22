@@ -7,12 +7,14 @@ import {
   MODE_DYNAMIC,
   RunDemoEngine,
   RunStatus,
-  SongData,
-  loadSongData,
+  SongEntry,
+  getCurrentSongKey,
+  loadSongDatabase,
+  setCurrentSongKey,
   songFilePath
 } from '../ets_libs/RunDemoEngine';
 import { loadAll as curveLoadAll } from '../ets_libs/CurveStore';
-import { NativeAudio } from '../ets_libs/NativeAudio';
+import { NativeAudio, NativePlayStatus } from '../ets_libs/NativeAudio';
 import { stepPipelineStart, stepPipelineStatus, stepPipelineStop } from 'libentry.so';
 import { SOURCE_SIM, STEP_SCENARIOS, getStepScenario, getStepSource } from '../ets_libs/StepSource';
 
@@ -162,10 +164,18 @@ struct Player {
   // ---- 真实音频（临时，默认关）----
   @State nativeOn: boolean = false;
   @State nativeText: string = '未启用';
+  /** 原生播放状态：idle | loading | ready | failed | gone */
+  @State nativeState: string = 'idle';
+  /** 解码失败原因（state === 'failed' 时有值） */
+  @State nativeError: string = '';
   /** 沙箱 filesDir：调试区显示出来，方便知道文件到底该放哪 */
   @State filesDir: string = '';
   /** song_data.json 指向的音频在沙箱里的完整路径 */
   @State songPath: string = '';
+  /** 当前歌曲在曲库里的键 */
+  @State songKey: string = '';
+  /** 曲库里所有歌的键（调试区用来切歌） */
+  @State songKeys: string[] = [];
 
   // ---- 步数检测源 / native 步频管线 ----
   @State stepSource: number = SOURCE_SIM;
@@ -182,13 +192,9 @@ struct Player {
     const c = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.ctx = c;
 
-    // 歌曲：优先读 song_data.json，读不到就用演示默认值
+    // 歌曲：从 song_data.json 的曲库里选一首（默认第一首 / 上次选的那首）
     this.filesDir = c.filesDir;
-    const song: SongData | null = loadSongData(c);
-    this.engine.setSong(song);
-    if (song !== null) {
-      this.songPath = songFilePath(c, song);
-    }
+    this.loadSongList(c);
 
     // 曲线：优先用磁盘上第一条曲线，否则用内置演示段
     try {
@@ -317,6 +323,17 @@ struct Player {
           }
           .width('100%')
           .padding({ left: 16, right: 16, top: 14 })
+
+          // 原生播放状态提示：加载中 / 解码失败（这两种以前都是**静默**的）
+          if (this.nativeOn && (this.nativeState === 'loading' || this.nativeState === 'failed')) {
+            Text(this.nativeState === 'loading'
+              ? '正在加载歌曲（解码 + 建缓冲，长曲子要几秒）…'
+              : ('解码失败：' + this.nativeError))
+              .fontSize(12)
+              .fontColor(this.nativeState === 'failed' ? ACCENT : TEXT_SECONDARY)
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 8 })
+          }
 
           // ================= 进度条 =================
           Column({ space: 2 }) {
@@ -653,8 +670,40 @@ struct Player {
         this.DebugRow('native 管线', this.pipelineOn
           ? ('运行中 · ' + this.pipelineStateText())
           : '未启动')
+        this.DebugRow('原生播放状态', this.nativeOn
+          ? (this.nativeState + (this.nativeError.length > 0 ? (' · ' + this.nativeError) : ''))
+          : '未启用')
         this.DebugRow('歌曲文件', this.songPath.length > 0 ? this.songPath : '未找到 song_data.json')
         this.DebugRow('filesDir', this.filesDir)
+        this.DebugRow('当前歌曲键', this.songKey.length > 0 ? this.songKey : '（曲库为空）')
+
+        // 曲库列表：点一下切歌（调试用；以后由歌曲列表页接管）
+        if (this.songKeys.length > 0) {
+          Text('曲库（点一下切换）')
+            .fontSize(12)
+            .fontColor(TEXT_SECONDARY)
+            .width('100%')
+          ForEach(this.songKeys, (k: string) => {
+            Row({ space: 10 }) {
+              SymbolGlyph(k === this.songKey
+                ? $r('sys.symbol.checkmark_square_fill')
+                : $r('sys.symbol.square'))
+                .fontSize(16)
+                .fontColor([k === this.songKey ? ACCENT : TEXT_TERTIARY])
+              Text(k)
+                .fontSize(12)
+                .fontColor(TEXT_PRIMARY)
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .width('100%')
+            .padding({ top: 6, bottom: 6 })
+            .onClick(() => {
+              this.switchSong(k);
+            })
+          }, (k: string) => k)
+        }
         this.DebugRow('光效', this.glowEnabled ? '开（拍相位驱动）' : '关')
         this.DebugRow('歌曲时长', formatTime(this.durSec) + ' · 共 ' + this.totalBeats() + ' 拍')
 
@@ -705,6 +754,56 @@ struct Player {
   // ==================== 逻辑 ====================
 
   // ==================== 步数检测源 / native 步频管线 ====================
+
+  // ==================== 曲库 / 切歌 ====================
+
+  /** 读曲库，并按 AppStorage 里记的键选中一首（记的键不在库里就用第一首） */
+  private loadSongList(c: common.UIAbilityContext): void {
+    const db: SongEntry[] = loadSongDatabase(c);
+    const keys: string[] = [];
+    for (let i = 0; i < db.length; i++) {
+      keys.push(db[i].key);
+    }
+    this.songKeys = keys;
+
+    if (db.length === 0) {
+      this.songKey = '';
+      this.songPath = '';
+      this.engine.setSong(null);      // 退回演示默认值
+      return;
+    }
+
+    let idx: number = 0;
+    const want: string = getCurrentSongKey();
+    for (let i = 0; i < db.length; i++) {
+      if (db[i].key === want) {
+        idx = i;
+        break;
+      }
+    }
+    this.songKey = db[idx].key;
+    setCurrentSongKey(this.songKey);
+    this.engine.setSong(db[idx].song);
+    this.songPath = songFilePath(c, db[idx].song);
+  }
+
+  /** 切歌（调试用）：停掉播放与管线 → 换歌 → 状态刷新 */
+  private switchSong(key: string): void {
+    if (key === this.songKey) {
+      return;
+    }
+    const c = this.ctx;
+    if (c === null) {
+      return;
+    }
+    this.stopPipeline();
+    this.native.stop();
+    this.engine.setPlaying(false);
+    setCurrentSongKey(key);
+    this.loadSongList(c);
+    this.seeking = false;
+    this.pullStatus();
+  }
 
   /** 从设置页（AppStorage）同步一次 */
   private syncStepSettings(): void {
@@ -847,10 +946,54 @@ struct Player {
     } else {
       this.native.stop();
       this.nativeText = '未启用';
+      this.nativeState = 'idle';
+      this.nativeError = '';
+      this.engine.setAudioReady(true);   // 退回纯演示：位置正常推进
     }
   }
 
+  /**
+   * 轮询原生播放状态（~5Hz）。一次解决三件事：
+   *   ① 显示「加载中…」—— 解码+建缓冲要好几秒，以前只能干等
+   *   ② 显示解码失败原因 —— 以前是静默的（显示"播放中"却没声）
+   *   ③ 用**真实**歌曲位置回填 —— 修掉页面自己积分造成的拍相位漂移
+   */
+  private pollNative(): void {
+    const st: NativePlayStatus | null = this.native.status();
+    if (st === null) {
+      return;
+    }
+    this.nativeState = st.state;
+    this.nativeError = st.error;
+    this.nativeText = this.nativeStateText(st);
+    // 只有真就绪才让页面位置前进（加载期间冻结，避免空走几秒）
+    this.engine.setAudioReady(st.state === 'ready');
+    if (st.state === 'ready') {
+      this.engine.syncPosition(st.posSec);
+    }
+  }
+
+  private nativeStateText(st: NativePlayStatus): string {
+    if (st.state === 'loading') {
+      return '加载中…';
+    }
+    if (st.state === 'failed') {
+      return '解码失败';
+    }
+    if (st.state === 'ready') {
+      return '播放中';
+    }
+    if (st.state === 'gone') {
+      return '会话已结束';
+    }
+    return '待播放';
+  }
+
   private startNative(): void {
+    // 一按播放就先把位置冻住：原生在"解码+建缓冲"期间不会出声，
+    // 等 status 报到 ready 才解冻并用真实位置回填（否则这几秒会空走）。
+    this.engine.setAudioReady(false);
+
     // ★ 优先播 Media 里的真实歌曲（song_data.json 指的那个）；
     //   没有 song_data.json 时才退回内置演示音源，否则会出现
     //   "用 LostMemory 的音频配 Protocol 的 BPM" 这种假数据。
@@ -955,17 +1098,19 @@ struct Player {
       // 光效每帧更新（唯一需要 ~30Hz 的东西，且只写一个 @State）
       this.pullGlow();
 
-      // 其余状态 + 管线轮询 ~5Hz（6 × 33ms ≈ 200ms）
+      // 其余状态 + 管线/原生轮询 ~5Hz（6 × 33ms ≈ 200ms）
       this.pollCounter++;
       if (this.pollCounter >= 6) {
         this.pollCounter = 0;
+        if (this.nativeOn) {
+          this.pollNative();             // 加载中 / 解码失败 / 真实位置回填
+          this.native.setSpeed(this.speed);
+        } else {
+          // 没走原生音频：本页纯演示，位置照常推进
+          this.engine.setAudioReady(true);
+        }
         this.pollPipeline();
         this.pullStatus();
-        if (this.nativeOn) {
-          // 倍速是慢变量，5Hz 足够；nativeText 也是 @State，别每帧写
-          this.native.setSpeed(this.speed);
-          this.nativeText = this.native.statusText();
-        }
       }
     }, TICK_MS);
   }

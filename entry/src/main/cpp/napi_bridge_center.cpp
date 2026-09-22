@@ -151,6 +151,24 @@ static std::thread          g_stepThread;
 static std::atomic<LiveStretchPlayer*> g_livePlayer{nullptr};
 static std::atomic<int>     g_liveSampleRate{48000};
 
+// ─── 原生播放状态（ArkTS 用 musicGetStatus() 查询）─────────────────────
+//   解决三件事：
+//     ① 解码+建缓冲要好几秒，页面以前只能干等（现在能显示"加载中…"）
+//     ② 解码失败以前是**静默**的（页面显示"播放中"却没声），现在能报原因
+//     ③ 页面以前自己积分歌曲位置 ⇒ 与真实播放位置漂开，光效相位对不上；
+//        现在能把 getInputPosition() 的真实位置回填回去
+static const int kPlayIdle    = 0;
+static const int kPlayLoading = 1;
+static const int kPlayReady   = 2;
+static const int kPlayFailed  = 3;
+
+static std::atomic<int>       g_playId{-1};
+static std::atomic<int>       g_playState{kPlayIdle};
+static std::atomic<long long> g_playFrames{0};
+static std::atomic<int>       g_playRate{0};
+static std::mutex             g_playErrMx;
+static std::string            g_playErr;
+
 
 //自定义音频加载函数
 static OH_AudioData_Callback_Result OnWriteData_New(
@@ -783,9 +801,21 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     if (audio_processor.total_frame <= 0 || audio_processor.sample_rate <= 0) {
         OH_LOG_ERROR(LOG_APP, "[play] 解码失败，放弃播放: frames=%{public}d rate=%{public}d",
                      audio_processor.total_frame, audio_processor.sample_rate);
+        {
+            std::lock_guard<std::mutex> lk(g_playErrMx);
+            g_playErr = "解码失败（frames=" + std::to_string(audio_processor.total_frame)
+                      + ", rate=" + std::to_string(audio_processor.sample_rate)
+                      + "）：文件可能是空的/损坏，或该编码没编进 .so";
+        }
+        g_playState.store(kPlayFailed, std::memory_order_release);
         clear(ctx);
         return;
     }
+
+    // 解码成功：先把真实结果回报出去（音乐页据此判断"能播"）
+    g_playFrames.store(audio_processor.total_frame, std::memory_order_relaxed);
+    g_playRate.store(audio_processor.sample_rate, std::memory_order_relaxed);
+
     AudioRendererInit(ctx->builder);                 //初始化（只建 builder）
 
     
@@ -842,6 +872,8 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
 
     player.play();                                     //加载音频流
     g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
+    // ★ 到这里才算"就绪"（渲染器已起、音频线程已跑），页面在此之前显示"加载中…"
+    g_playState.store(kPlayReady, std::memory_order_release);
 
     // ★ 把"当前正在播的播放器"暴露给步频管线，供它读歌曲位置（脚步回填用）。
     //   用 RAII：WorkerThread 无论从哪条路径退出（自然结束 / cancel / 异常）
@@ -854,7 +886,11 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
             g_liveSampleRate.store(sr, std::memory_order_relaxed);
             g_livePlayer.store(p, std::memory_order_release);
         }
-        ~LivePlayerReg() { g_livePlayer.store(nullptr, std::memory_order_release); }
+        ~LivePlayerReg() {
+            g_livePlayer.store(nullptr, std::memory_order_release);
+            // 退出（自然播完 / 取消）后回到 idle，页面据此冻结位置、不再回填
+            g_playState.store(kPlayIdle, std::memory_order_release);
+        }
     };
     LivePlayerReg liveReg(&player, audio_processor.sample_rate);
 
@@ -1054,6 +1090,16 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
         std::lock_guard<std::mutex> lock(g_mapMutex);
         ctx->playerId = g_nextId++;
         g_downloadMap[ctx->playerId] = ctx;
+
+        // 新任务开始：状态复位为"加载中"
+        g_playId.store(ctx->playerId, std::memory_order_relaxed);
+        g_playFrames.store(0, std::memory_order_relaxed);
+        g_playRate.store(0, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> elk(g_playErrMx);
+            g_playErr.clear();
+        }
+        g_playState.store(kPlayLoading, std::memory_order_release);
         
     }
     
@@ -1211,6 +1257,56 @@ static napi_value stepPipelineStatus(napi_env env, napi_callback_info info) {
     return out;
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  musicGetStatus(id) —— 原生播放状态查询
+//    返回 JSON 字符串：
+//      {"ok":bool,"state":"idle|loading|ready|failed|gone",
+//       "frames":number,"rate":number,"posSec":number,"error":string}
+//    posSec 来自 getInputPosition()，是**真实**的歌曲原始时间轴位置，
+//    页面拿它回填，就不会再因为自己积分而把拍相位漂掉。
+// ════════════════════════════════════════════════════════════════════════
+static napi_value musicGetStatus(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    int32_t id = -1;
+    if (argc >= 1) {
+        napi_get_value_int32(env, args[0], &id);
+    }
+
+    const int state = g_playState.load(std::memory_order_acquire);
+    const bool sameTask = (g_playId.load(std::memory_order_relaxed) == id);
+    static const char* kStateNames[4] = {"idle", "loading", "ready", "failed"};
+    const std::string stateName = sameTask ? std::string(kStateNames[state & 3]) : std::string("gone");
+
+    const int rate = g_playRate.load(std::memory_order_relaxed);
+    double posSec = 0.0;
+    LiveStretchPlayer* pl = g_livePlayer.load(std::memory_order_acquire);
+    if (pl != nullptr && rate > 0) {
+        posSec = static_cast<double>(pl->getInputPosition()) / static_cast<double>(rate);
+    }
+
+    std::string err;
+    if (sameTask && state == kPlayFailed) {
+        std::lock_guard<std::mutex> lk(g_playErrMx);
+        err = g_playErr;
+    }
+
+    std::ostringstream os;
+    os << "{\"ok\":" << (sameTask ? "true" : "false")
+       << ",\"state\":\"" << stateName << "\""
+       << ",\"frames\":" << static_cast<long long>(g_playFrames.load(std::memory_order_relaxed))
+       << ",\"rate\":" << rate
+       << ",\"posSec\":" << posSec
+       << ",\"error\":\"" << jsonEscape(err) << "\"}";
+
+    const std::string s = os.str();
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, s.c_str(), s.size(), &out);
+    return out;
+}
+
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports)
 {
@@ -1234,7 +1330,9 @@ static napi_value Init(napi_env env, napi_value exports)
         {"stepPipelineStart", nullptr, stepPipelineStart, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stepPipelineStop", nullptr, stepPipelineStop, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stepPipelineSetScenario", nullptr, stepPipelineSetScenario, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"stepPipelineStatus", nullptr, stepPipelineStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"stepPipelineStatus", nullptr, stepPipelineStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // ★ 原生播放状态：加载中/就绪/失败 + 真实歌曲位置
+        {"musicGetStatus", nullptr, musicGetStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

@@ -14,7 +14,19 @@
  */
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { changeSpeed, music_cancel, music_pause, music_play, music_resume } from 'libentry.so';
+import { changeSpeed, music_cancel, music_pause, music_play, music_resume, musicGetStatus } from 'libentry.so';
+
+/** musicGetStatus() 返回的 JSON */
+export interface NativePlayStatus {
+  ok: boolean;
+  /** idle | loading | ready | failed | gone */
+  state: string;
+  frames: number;
+  rate: number;
+  /** 真实歌曲位置（秒，歌曲原速时间轴） */
+  posSec: number;
+  error: string;
+}
 
 export class NativeAudio {
   private id: number = -1;
@@ -154,6 +166,22 @@ export class NativeAudio {
       changeSpeed(s);
     } catch (e) {
       console.error('NativeAudio.setSpeed 失败：' + JSON.stringify(e));
+    }
+  }
+
+  /**
+   * 查询原生播放状态。
+   * 没有在播（id < 0）返回 null；解析失败也返回 null。
+   */
+  status(): NativePlayStatus | null {
+    if (this.id < 0) {
+      return null;
+    }
+    try {
+      return JSON.parse(musicGetStatus(this.id)) as NativePlayStatus;
+    } catch (e) {
+      console.error('NativeAudio.status 解析失败：' + JSON.stringify(e));
+      return null;
     }
   }
 
