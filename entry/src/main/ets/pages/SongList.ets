@@ -1,11 +1,11 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { picker } from '@kit.CoreFileKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { SongJSON, SongListJSON, selection, saveAt } from '../ets_libs/PlayListStore';
+import { SongJSON, SongListJSON, selection, saveAt, totalSongList, SongJSON_ROW } from '../ets_libs/PlayListStore';
 import { common } from '@kit.AbilityKit';
 import call from '@ohos.telephony.call';
 import { loadAll } from '../ets_libs/CurveStore';
-import {analyzeMusicAsync, getAnalyseStatus} from 'libentry.so';
+import {analyzeMusicAsync, getAnalyseStatus, SongMeta} from 'libentry.so';
 
 /**
  * 歌曲列表（音乐库）
@@ -281,11 +281,12 @@ export struct SongList {
                   // 起一个进度定时器：native 侧按阶段/百分比回报，done/failed 自动收尾
                   const progressTimer = startAnalyseProgress();
                   // ★ 异步分析：不阻塞主线程；CSV 生成在 <filesDir>/Media/ 下
-                  analyzeMusicAsync(dir, (bpm: number | null, err?: string) => {
+                  analyzeMusicAsync(dir, (meta: SongMeta | null, err?: string) => {
                     clearInterval(progressTimer);
-                    if (bpm !== null) {
-                      console.info(`分析完成: BPM=${bpm}, 已生成 ${dir.replace(/\.[^.]+$/, '')}_beats.csv`);
-
+                    if (meta !== null) {
+                      // native 已从容器元数据取到歌名/作者/时长，并算好 BPM
+                      console.info(`分析完成: ${meta.name} · ${meta.author} · ${meta.time} · ${meta.BPM} BPM`);
+                      this.add_music(meta.name, meta.BPM, meta.author,meta.time, selection.OFFLINE)
                     } else {
                       console.error(`分析失败: ${err ?? '未知原因'}`);
                     }
@@ -577,7 +578,42 @@ export struct SongList {
     this.selectedIndexes = arr;
   }
 
-  private add_music(name: string, BPM: number, author: string){
+
+
+  private add_music(name_: string, BPM_: number, author_: string, time_:string,type_: selection){
+    let rawData : SongJSON_ROW = {
+      name: name_,
+      BPM: BPM_,
+      author: author_,
+      time: time_,
+      type: type_
+    }
+
+    const formalData : SongJSON = {
+      name: rawData.name ? name_ : "Unknow Name",
+      BPM: rawData.BPM ? BPM_ : NaN,
+      author: rawData.author ? author_ : "Unkown Artist",
+      time: rawData.time ? time_ : "00:00",
+      type: type_
+    }
+
+    const ctx: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const path: string = ctx.filesDir + '/Media/Songs.json';
+    try {
+      let fd = fs.openSync(path, fs.OpenMode.READ_WRITE| fs.OpenMode.CREATE)
+      let file = fs.readTextSync(path);
+      let songList : totalSongList = {songList:[]};
+      if(file) {
+        songList = JSON.parse(file) as totalSongList;
+      }
+      songList.songList.push(formalData);
+      fs.writeSync(fd.fd, JSON.stringify(songList));
+
+    } catch (e){
+      console.error(`Face Error in load music List: ${e}`)
+    }
+
+
 
   }
 

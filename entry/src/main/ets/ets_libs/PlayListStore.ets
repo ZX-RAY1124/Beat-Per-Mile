@@ -25,6 +25,10 @@ export interface SongJSON {
   type: selection;
 }
 
+export interface totalSongList{
+  songList: SongJSON[];
+}
+
 export interface SongListJSON {
   index: number,
   name: string,

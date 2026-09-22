@@ -96,6 +96,10 @@ struct BeatResult {
     double bpm;                     // Essentia 给出的全局 tempo 估计
     double confidence;              // ticks 置信度
     size_t sample_count;            // 参与分析的采样数（= 音频秒数 × 44100）
+    // ---- 歌曲信息（由宿主从容器元数据/文件名填充，算法层不产生）----
+    std::string songTitle;          // 歌曲名（取不到时由宿主退回文件名）
+    std::string songArtist;         // 作者/艺术家（取不到时为空串）
+    std::string songTime;           // 总时长，形如 "3:42" / "1:02:03"
 
     BeatResult() : ok(false), bpm(0.0), confidence(0.0), sample_count(0) {}
 };

@@ -76,9 +76,48 @@ struct DecodeResult {
     int sampleRate;               // 固定 44100
     double durationSec;           // 时长（秒），便于诊断
     std::string codecName;        // 实际使用的解码器名，便于诊断
+    // ---- 容器元数据（供上层填充歌曲信息）----
+    std::string title;            // 歌曲名；取不到时为空，由上层退回文件名
+    std::string artist;           // 作者/艺术家；取不到时为空
 
     DecodeResult() : ok(false), sampleRate(44100), durationSec(0.0) {}
 };
+
+/**
+ * 在 metadata 字典里按一组候选键查找。
+ * 各容器用的标签名不一样，候选键必须都覆盖到：
+ *   · MP4/M4A (iTunes)：©nam / ©ART —— 注意是 U+00A9 后跟字母，不是 ASCII 的 'c'
+ *   · MP3 (ID3v2)     ：title/artist、TIT2/TPE1
+ *   · FLAC / OGG      ：TITLE / ARTIST
+ * 返回原始字符串；找不到返回空串。
+ */
+inline std::string dictGetAny(AVDictionary* dict, const char* const* keys, int n) {
+    if (dict == nullptr) return std::string();
+    for (int i = 0; i < n; ++i) {
+        AVDictionaryEntry* e = av_dict_get(dict, keys[i], nullptr, 0);
+        if (e != nullptr && e->value != nullptr && e->value[0] != '\0') {
+            return std::string(e->value);
+        }
+    }
+    return std::string();
+}
+
+/** 从容器元数据里取「歌曲名 / 作者」 */
+inline void readSongTags(AVFormatContext* fmt, DecodeResult& r) {
+    static const char* const kTitleKeys[] = {
+        "\xC2\xA9nam",          // ©nam (MP4/M4A)
+        "title", "TIT2", "TITLE", "Title", "name"
+    };
+    static const char* const kArtistKeys[] = {
+        "\xC2\xA9" "ART",       // ©ART (MP4/M4A)
+        "artist", "TPE1", "ARTIST", "Artist",
+        "album_artist", "albumartist", "ALBUMARTIST", "author", "AUTHOR"
+    };
+    r.title = dictGetAny(fmt->metadata, kTitleKeys,
+                         (int)(sizeof(kTitleKeys) / sizeof(kTitleKeys[0])));
+    r.artist = dictGetAny(fmt->metadata, kArtistKeys,
+                          (int)(sizeof(kArtistKeys) / sizeof(kArtistKeys[0])));
+}
 
 /** 进度回调：pct ∈ [0,1]，-1 表示总时长未知；note 供上层打日志 */
 typedef std::function<void(double pct, const std::string& note)> ProgressFn;
@@ -140,6 +179,13 @@ inline DecodeResult decodeToMono44k(const std::string& path, const DecodeOptions
     }
 
     AVCodecParameters* par = fmt->streams[audioIdx]->codecpar;
+
+    // ---- 2.5 顺手取容器元数据（歌曲名 / 作者）----
+    // 必须在 avformat_close_input 之前取：fmt 一关，metadata 就失效了。
+    readSongTags(fmt, r);
+    OH_LOG_INFO(LOG_APP, "[decode] 元数据: title=\"%{public}s\" artist=\"%{public}s\"",
+                r.title.c_str(), r.artist.c_str());
+
     const AVCodec* codec = avcodec_find_decoder(par->codec_id);
     if (codec == nullptr) {
         r.error = std::string("找不到解码器 codec_id=") + std::to_string(par->codec_id);

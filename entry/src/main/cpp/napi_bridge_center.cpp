@@ -391,6 +391,50 @@ static void AsyncCleanupCallback(napi_env env, void *finalizeData, void *finaliz
     OH_LOG_INFO(LOG_APP, "[analyse] task released");
 }
 
+/** 文件名（含扩展名） */
+static std::string baseNameOf(const std::string& path) {
+    const size_t slash = path.find_last_of("/\\");
+    return (slash == std::string::npos) ? path : path.substr(slash + 1);
+}
+
+/** 去掉扩展名的完整路径 */
+static std::string stripExtOf(const std::string& path) {
+    const size_t slash = path.find_last_of("/\\");
+    const size_t start = (slash == std::string::npos) ? 0 : slash + 1;
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos || dot <= start) return path;
+    return path.substr(0, dot);
+}
+
+/** 秒 → "M:SS"；超过 1 小时 → "H:MM:SS"。与 ArkTS 侧 formatDuration 格式一致 */
+static std::string formatDuration(int totalSec) {
+    if (totalSec < 0) totalSec = 0;
+    const int h = totalSec / 3600;
+    const int m = (totalSec % 3600) / 60;
+    const int s = totalSec % 60;
+    char buf[32];
+    if (h > 0) {
+        std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, s);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%d:%02d", m, s);
+    }
+    return std::string(buf);
+}
+
+/** 往对象上挂 string 属性 */
+static void setStrProp(napi_env env, napi_value obj, const char* key, const std::string& val) {
+    napi_value v = nullptr;
+    napi_create_string_utf8(env, val.c_str(), val.size(), &v);
+    napi_set_named_property(env, obj, key, v);
+}
+
+/** 往对象上挂 number 属性 */
+static void setNumProp(napi_env env, napi_value obj, const char* key, double val) {
+    napi_value v = nullptr;
+    napi_create_double(env, val, &v);
+    napi_set_named_property(env, obj, key, v);
+}
+
 /** TSFN 主线程回调：把结果或错误交给 ArkTS */
 static void AnalyseCallback(napi_env env, napi_value jsCallback, void *context, void *data) {
     (void)context;
@@ -405,11 +449,22 @@ static void AnalyseCallback(napi_env env, napi_value jsCallback, void *context, 
     size_t argc = 0;
 
     if (result->ok) {
-        // 成功：第一个参数 = BPM（ArkTS 侧取数字即代表成功）
-        napi_create_double(env, result->bpm, &argv[0]);
+        // 成功：第一个参数 = 歌曲信息对象 { name, author, time, BPM }
+        // 字段名刻意与 PlayListStore 的 SongJSON 对齐，上层可直接落库
+        napi_value obj = nullptr;
+        napi_create_object(env, &obj);
+        setStrProp(env, obj, "name",   result->songTitle);
+        setStrProp(env, obj, "author", result->songArtist);
+        setStrProp(env, obj, "time",   result->songTime);
+        setNumProp(env, obj, "BPM",    result->bpm);
+        argv[0] = obj;
         argc = 1;
-        OH_LOG_INFO(LOG_APP, "[analyse] ok: bpm=%{public}.3f ticks=%{public}u",
-                    result->bpm, static_cast<unsigned int>(result->ticks.size()));
+        OH_LOG_INFO(LOG_APP,
+                    "[analyse] ok: name=\"%{public}s\" author=\"%{public}s\" "
+                    "time=%{public}s BPM=%{public}.3f ticks=%{public}u",
+                    result->songTitle.c_str(), result->songArtist.c_str(),
+                    result->songTime.c_str(), result->bpm,
+                    static_cast<unsigned int>(result->ticks.size()));
     } else {
         // 失败：第一个参数 = null，第二个参数 = 人类可读原因
         napi_get_null(env, &argv[0]);
@@ -457,6 +512,23 @@ static void AnalyseWorkerThread(AnalyseTask *task) {
                         static_cast<long long>(nowMs() - t0), result->ok ? 1 : 0,
                         static_cast<unsigned int>(result->ticks.size()));
 
+            // ★ 歌曲信息必须在 `*result = eb::detect(...)` **之后**填：
+            //   detect() 返回的是一个新的 BeatResult，会把上面赋的值整体覆盖掉。
+            //   顺序写反过一次，表现为 title/artist 恒为空。
+            if (dec.title.empty()) {
+                // 容器里没有 title 标签时退回文件名（去扩展名）
+                result->songTitle = stripExtOf(baseNameOf(task->audioPath));
+            } else {
+                result->songTitle = dec.title;
+            }
+            result->songArtist = dec.artist;
+            const int totalSec = static_cast<int>(dec.samples.size() / (size_t)dec.sampleRate);
+            result->songTime = formatDuration(totalSec);
+            OH_LOG_INFO(LOG_APP,
+                        "[analyse] 歌曲信息: name=\"%{public}s\" author=\"%{public}s\" time=%{public}s",
+                        result->songTitle.c_str(), result->songArtist.c_str(),
+                        result->songTime.c_str());
+
             if (result->ok && !result->ticks.empty()) {
                 // 写 CSV（路径规则与 detect_file_to_csv 保持一致：同名目录 + _beats.csv）
                 setAnalysePhase("write", -1);
@@ -501,6 +573,25 @@ static void AnalyseWorkerThread(AnalyseTask *task) {
                 both += fallback.error.empty() ? std::string("(无)") : fallback.error;
                 result->ok = false;
                 result->error = both;
+            }
+        }
+
+        // 兜底补齐歌曲信息：走回退路径时 dec 是失败的、没有元数据，
+        // 但仍可用文件名 + 结果样本数给出一份可用的默认值，
+        // 保证回调对象里 name/time 永远不是空串。
+        if (result->ok) {
+            if (result->songTitle.empty()) {
+                result->songTitle = stripExtOf(baseNameOf(task->audioPath));
+            }
+            if (result->songTime.empty()) {
+                int totalSec = 0;
+                if (dec.ok && dec.sampleRate > 0) {
+                    totalSec = static_cast<int>(dec.samples.size() / (size_t)dec.sampleRate);
+                } else if (result->sample_count > 0) {
+                    // Essentia 的 sample_count 是按 44100 计的单声道样本数
+                    totalSec = static_cast<int>(result->sample_count / 44100u);
+                }
+                result->songTime = formatDuration(totalSec);
             }
         }
     } catch (const std::exception &e) {

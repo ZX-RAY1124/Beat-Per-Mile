@@ -7,6 +7,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import {changeSpeed,
   analyzeMusicAsync,
+  SongMeta,
   music_cancel, music_pause, music_play, music_resume } from 'libentry.so';
 import { fileIo } from '@kit.CoreFileKit';
 
@@ -40,9 +41,9 @@ struct audio_test {
             copyRawFileToSandbox(getContext(this) as common.UIAbilityContext, "LostMemory.m4a").then((audioPath:string) => {
               // ★ 用异步接口：分析在工作线程上跑，不阻塞主线程
               //   CSV 落在与 audioPath 相同的目录 + 同名 + _beats.csv
-              analyzeMusicAsync(audioPath, (bpm: number | null, err?: string) => {
-                if (bpm !== null) {
-                  console.info(`分析完成: BPM=${bpm}, 已生成 ${audioPath.replace(/\.[^.]+$/, '')}_beats.csv`);
+              analyzeMusicAsync(audioPath, (meta: SongMeta | null, err?: string) => {
+                if (meta !== null) {
+                  console.info(`分析完成: ${meta.name} · ${meta.author} · ${meta.time} · ${meta.BPM} BPM`);
                 } else {
                   console.error(`分析失败: ${err ?? '未知原因'}`);
                 }
