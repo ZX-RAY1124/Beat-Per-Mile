@@ -9,60 +9,87 @@
 #include "LiveStretchPlayer.h"
 #include <cstring>
 #include <algorithm>
+#include <atomic>
+#include <vector>
 // 暂时不引用 essentia，先验证编译链路没问题
 
-// ─── 播放用环形缓冲区：实现真正的流式生产者-消费者 ───
+// ─── 播放用环形缓冲区：无锁单生产者-单消费者（SPSC） ───
+// 生产者：LiveStretchPlayer 的回调线程（只写 writePos_）
+// 消费者：OH_AudioRenderer 的写数据回调线程（只写 readPos_）
+// 两端各只写自己的下标、用 acquire/release 配对传递数据，因此读端绝不阻塞 ——
+// 这是实时音频回调的硬要求（旧版用一把 fill_ 同时被两端读写，是数据竞争）。
+// ★ 契约：任一时刻只能各有一个生产者/消费者线程；不得从第三个线程调用 reset()。
+//   （多播放器共享本对象属于"全局单例"问题，不在本次修复范围。）
 class PlaybackRingBuffer {
 public:
-    PlaybackRingBuffer(size_t capacity) : buffer_(capacity + 1), capacity_(capacity + 1) {}    //留一格区分满和空
+    explicit PlaybackRingBuffer(size_t capacity)
+        : buffer_(capacity + 1, 0.0f), capacity_(capacity + 1) {}   // 留一格区分「满/空」
 
-    /** 生产者写入数据，返回实际写入的 float 个数 */
+    PlaybackRingBuffer(const PlaybackRingBuffer&) = delete;
+    PlaybackRingBuffer& operator=(const PlaybackRingBuffer&) = delete;
+
+    /** 生产者写入数据，返回实际写入的 float 个数（满则丢弃新数据） */
     size_t write(const float* data, size_t count) {
-        size_t space = capacity_ - fill_;
-        size_t toWrite = std::min(count, space);
-        for (size_t i = 0; i < toWrite; i++) {
-            buffer_[writePos_] = data[i];
-            writePos_ = (writePos_ + 1) % capacity_;
+        if (data == nullptr || count == 0) return 0;
+        const size_t w = writePos_.load(std::memory_order_relaxed);
+        const size_t r = readPos_.load(std::memory_order_acquire);
+        const size_t used  = (w + capacity_ - r) % capacity_;
+        const size_t space = capacity_ - 1 - used;              // 恒空一格 ⇒ 满/空可区分
+        const size_t toWrite = (count < space) ? count : space;
+        for (size_t i = 0; i < toWrite; ++i) {
+            buffer_[(w + i) % capacity_] = data[i];
         }
-        fill_ += toWrite;
+        // release：保证上面的写入对读到本值的消费者可见
+        writePos_.store((w + toWrite) % capacity_, std::memory_order_release);
         return toWrite;
     }
 
-    /** 消费者读取数据，返回实际读取的 float 个数 */
+    /** 消费者读取数据（音频回调内，绝不阻塞），返回实际读取的 float 个数 */
     size_t read(float* out, size_t count) {
-        size_t toRead = std::min(count, fill_);
-        for (size_t i = 0; i < toRead; i++) {
-            out[i] = buffer_[readPos_];
-            readPos_ = (readPos_ + 1) % capacity_;
+        if (out == nullptr || count == 0) return 0;
+        const size_t r = readPos_.load(std::memory_order_relaxed);
+        const size_t w = writePos_.load(std::memory_order_acquire);
+        const size_t used = (w + capacity_ - r) % capacity_;
+        const size_t toRead = (count < used) ? count : used;
+        for (size_t i = 0; i < toRead; ++i) {
+            out[i] = buffer_[(r + i) % capacity_];
         }
-        fill_ -= toRead;
+        // release：保证消费者已拷走的数据不会再被生产者覆盖
+        readPos_.store((r + toRead) % capacity_, std::memory_order_release);
         return toRead;
     }
 
-    size_t available() const { return fill_; }
-    size_t capacity() const { return capacity_; }
-    bool empty() const { return fill_ == 0; }
-    bool full() const { return fill_ == capacity_; }
+    /** 可读元素个数（诊断用；并发下只是某一瞬间的快照） */
+    size_t available() const {
+        const size_t w = writePos_.load(std::memory_order_acquire);
+        const size_t r = readPos_.load(std::memory_order_acquire);
+        return (w + capacity_ - r) % capacity_;
+    }
+    /** 可写元素个数（诊断用） */
+    size_t space() const { return capacity_ - 1 - available(); }
 
+    size_t capacity() const { return capacity_ - 1; }             // 对外报"可用容量"
+    bool empty() const { return available() == 0; }
+    bool full() const { return available() >= capacity_ - 1; }
+
+    /** ★ 只能在生产者与消费者都已停止时调用（两者都置 0，不能与读写并发） */
     void reset() {
-        readPos_ = 0;
-        writePos_ = 0;
-        fill_ = 0;
+        readPos_.store(0, std::memory_order_relaxed);
+        writePos_.store(0, std::memory_order_relaxed);
     }
 
 private:
     std::vector<float> buffer_;
-    size_t capacity_;
-    size_t readPos_ = 0;
-    size_t writePos_ = 0;
-    size_t fill_ = 0;
+    size_t capacity_;                    // = 请求容量 + 1（多出的一格用于区分满/空）
+    std::atomic<size_t> readPos_{0};     // 仅消费者写
+    std::atomic<size_t> writePos_{0};    // 仅生产者写
 };
 
 // ════════════════════════════════════════════
               
 
-static std::vector<OH_AudioRenderer*> audioRenderers;   //音频流构建器
-static  std::vector<OH_AudioStreamBuilder*> builders;
+// （原 audioRenderers / builders 两个全局数组已删除：它们在 WorkerThread 里 push_back，
+//   却用 playerId-1 去索引；clear() 又 erase(begin())，下标与 id 从第二次播放起必然错位。）
 
 #undef LOG_DOMAIN
 #undef LOG_TAG
@@ -80,6 +107,12 @@ struct TsfnContext {
     std::string fileName;
     std::thread worker;
     
+    // ★ 本任务自己的声卡对象。不再用"全局数组 + playerId-1 下标"反查——
+    //   push_back 的顺序不等于 playerId-1，且 clear() 会 erase(begin())，
+    //   第二次播放时下标就会越界（详见本次修复说明）。
+    OH_AudioRenderer*      renderer = nullptr;
+    OH_AudioStreamBuilder* builder  = nullptr;
+
     int playerId;    //播放任务id
 };
 
@@ -144,28 +177,24 @@ static void OnError_New(
 
 
 static void AudioRenderer_BuilderRelease(OH_AudioRenderer* audioRenderer, OH_AudioStreamBuilder* builder){
-    if(audioRenderer){
+    // 两者独立判空：原来只在 audioRenderer 非空时才 Destroy builder，
+    // 渲染器创建失败时会漏掉构建器。（原先那两句 = nullptr 是对按值形参赋值，本就没有作用。）
+    if (audioRenderer) {
         OH_AudioRenderer_Release(audioRenderer);
+    }
+    if (builder) {
         OH_AudioStreamBuilder_Destroy(builder);
-        audioRenderer = nullptr;
-        builder = nullptr;
     }
     //这里释放文件进程
     
     
 }
 
-static void AudioRendererInit(OH_AudioRenderer*& audioRenderer, OH_AudioStreamBuilder*& builder){
+// 只创建并配置 builder；渲染器由 GenerateRenderer 生成，由调用方保存到自己的上下文里。
+static void AudioRendererInit(OH_AudioStreamBuilder*& builder){
     OH_LOG_INFO(LOG_APP, "Now Add AudioRenderer");
-    /*
-    if (audioRenderer){            //事先清理
-        OH_AudioRenderer_Release(audioRenderer);
-        OH_AudioStreamBuilder_Destroy(builder);
-        
-        audioRenderer = nullptr;
-        builder = nullptr;
-    }
-    */
+    // （原"事先清理"分支已删除：audioRenderer 是局部变量且从未被赋值，
+    //   真正的清理由 AudioRenderer_BuilderRelease() 负责。）
     //============构建音频播放器============ 
     OH_AudioStreamBuilder_Create(&builder, AUDIOSTREAM_TYPE_RENDERER);
     
@@ -296,15 +325,24 @@ static void TsfnFinalizeCallback(napi_env env, void *finalizeData, void *finaliz
 }
 
 static void clear(TsfnContext* ctx){
-    AudioRenderer_BuilderRelease(audioRenderers[ctx->playerId-1],builders[ctx->playerId-1]);
-    audioRenderers.erase(audioRenderers.begin());
-    builders.erase(builders.begin());
-    napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
+    // 先从表里摘掉：之后任何按 id 的查找都拿不到它，缩小与 JS 线程的竞态窗口。
     {
         std::lock_guard<std::mutex> lock(g_mapMutex);
         g_downloadMap.erase(ctx->playerId);
     }
-    
+    // 只释放本任务自己的声卡对象（不再按下标去数组里找，那可能找的是别人的）
+    AudioRenderer_BuilderRelease(ctx->renderer, ctx->builder);
+    ctx->renderer = nullptr;
+    ctx->builder  = nullptr;
+    napi_release_threadsafe_function(ctx->tsfn, napi_tsfn_release);
+}
+
+// 按任务 id 取渲染器。查不到（id 非法、或已经 clear/释放）返回 nullptr，
+// 调用方必须判空 —— 不要再用 id-1 去索引任何容器。
+static OH_AudioRenderer* rendererForId(int id) {
+    std::lock_guard<std::mutex> lock(g_mapMutex);
+    auto it = g_downloadMap.find(id);
+    return (it != g_downloadMap.end()) ? it->second->renderer : nullptr;
 }
 
 
@@ -312,27 +350,22 @@ static void clear(TsfnContext* ctx){
 static void WorkerThread(TsfnContext *ctx, char filePath[]){
     bool finished = false;
     bool quit = false;
-    int num = ctx->playerId - 1;
     //============分析音频=============
     napi_acquire_threadsafe_function(ctx->tsfn);
     //work
     audio_processor audio_processor;
     audio_processor.load_audio(filePath);            //音频位置
-    OH_AudioRenderer* audioRenderer;
-    OH_AudioStreamBuilder* builder;
-    
-    AudioRendererInit(audioRenderer, builder);       //初始化
+    AudioRendererInit(ctx->builder);                 //初始化（只建 builder）
 
     
-    builders.push_back(builder);
-    audioRenderers.push_back(audioRenderer);
+    // 渲染器/构建器保存在 ctx 里，不再往全局数组里塞
     
     
     
     
     // 使用源音频采样率覆盖 builder（源文件 vs 硬编码 48kHz）
-    OH_AudioStreamBuilder_SetSamplingRate(builders[num], audio_processor.sample_rate);
-    OH_AudioStreamBuilder_GenerateRenderer(builders[num], &audioRenderers[num]);   
+    OH_AudioStreamBuilder_SetSamplingRate(ctx->builder, audio_processor.sample_rate);
+    OH_AudioStreamBuilder_GenerateRenderer(ctx->builder, &ctx->renderer);   
     
     //===========LiveStretchPlayer==============
     LiveStretchPlayer player(2, audio_processor.sample_rate, audio_processor.total_frame, 1.0, 512);
@@ -371,7 +404,7 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     });
     
     player.loadAudio(audio_processor.make_planner_data(), audio_processor.total_frame);
-    OH_AudioRenderer_Start(audioRenderers[num]);            //开始播放
+    OH_AudioRenderer_Start(ctx->renderer);                  //开始播放
 
     player.play();                                     //加载音频流
     g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
@@ -380,7 +413,7 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         player.setSpeed(dataClip->accelerate);
         if(ctx->cancelled.load()){
             quit = true;
-            OH_AudioRenderer_Stop(audioRenderers[num]);
+            OH_AudioRenderer_Stop(ctx->renderer);
             clear(ctx);
             continue;
 
@@ -389,7 +422,7 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         while (ctx->paused.load()) {
             if(ctx->cancelled.load()){
                 quit = true;
-                OH_AudioRenderer_Stop(audioRenderers[num]);
+                OH_AudioRenderer_Stop(ctx->renderer);
                 clear(ctx);
                 break;
             }
@@ -427,7 +460,7 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     }
     if(finished){
         OH_LOG_INFO(LOG_APP, "DONE");
-        OH_AudioRenderer_Stop(audioRenderer);
+        OH_AudioRenderer_Stop(ctx->renderer);   // ← 原来这里传的是从未赋值的局部 audioRenderer
         clear(ctx);
         return;
     }
@@ -463,7 +496,9 @@ static napi_value musicPause(napi_env env, napi_callback_info info){
     int id;
     napi_get_value_int32(env, args[0], &id);
     
-    OH_AudioRenderer_Pause(audioRenderers[id-1]);           //暂停音频
+    if (OH_AudioRenderer* r = rendererForId(id)) {          //暂停音频
+        OH_AudioRenderer_Pause(r);
+    }
     
     std::lock_guard<std::mutex> lock(g_mapMutex);
     auto it = g_downloadMap.find(id);
@@ -493,7 +528,9 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
     }
     
     // 最后启动 AudioRenderer（此时环形缓冲区已有数据，避免 underrun）
-    OH_AudioRenderer_Start(audioRenderers[id-1]);
+    if (OH_AudioRenderer* r = rendererForId(id)) {
+        OH_AudioRenderer_Start(r);
+    }
     
     return nullptr;
 }
@@ -508,7 +545,9 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
     int id;
  
     napi_get_value_int32(env, args[0], &id);
-    OH_AudioRenderer_Stop(audioRenderers[id - 1]);         //结束播放
+    if (OH_AudioRenderer* r = rendererForId(id)) {          //结束播放
+        OH_AudioRenderer_Stop(r);
+    }
 
 
     std::lock_guard<std::mutex> lock(g_mapMutex);
