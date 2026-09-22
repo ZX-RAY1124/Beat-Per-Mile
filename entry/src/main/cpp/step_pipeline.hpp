@@ -3,7 +3,8 @@
  * =============================================================================
  * 纯头文件 · C++11 · 零 NAPI
  *
- * 装配：gaitsim::GaitSim → steplib::StepDetector → tempo::TempoFollower → 倍速
+ * 装配：gaitsim::GaitSim → steplib::StepDetector → ┬ TempoFollower  → 倍速（FOLLOW 动态模式）
+ *                                              └  bpmw::PhaseTrim → 规定倍速×(1+δ)（PRESET 恒速/曲线）
  *
  * 刻意做成"纯逻辑 + tick(dt, songPos)"而不是自带线程：
  *   这样它能在宿主机上被完全验证（见 _work/step_pipeline_test.cpp），
@@ -21,6 +22,7 @@
 #include "gait_sim.hpp"
 #include "step_detector.hpp"
 #include "TempoFollower.hpp"
+#include "phase_trim.hpp"        // 预设模式的相位对齐工具（团队已验证）
 
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +30,16 @@
 #include <utility>
 
 namespace steprun {
+
+// ─── 两种控制律 ────────────────────────────────────────────────────────
+//   FOLLOW（动态模式）：闭环。倍速 = 实测步频 / 歌曲BPM，TempoFollower 顺带修相位。
+//   PRESET（恒速/曲线）：开环 + 微调。倍速 = 规定步频 / 歌曲BPM，再乘 PhaseTrim 的 (1+δ)。
+//     ★ 同一时刻只能有一个"相位所有者"：两种模式绝不叠加，否则两个控制器抢同一个量。
+enum { kModeFollow = 0, kModePreset = 1 };
+
+// 倍速上下限（与 TempoFollower 默认一致）
+const double kMultMin = 0.50;
+const double kMultMax = 2.00;
 
 /** (墙钟秒, 歌曲位置秒) 的历史，用于按脚步时间戳回填歌曲位置 */
 class SongClock {
@@ -64,12 +76,16 @@ struct Status {
     double        targetBpm;     // 由步频直接算出的目标（已夹到上下限）
     double        songSec;       // 最近一次上报的歌曲位置
     std::uint64_t steps;         // 累计步数
-    int           followState;   // 0=ADJUST 1=CHASE 2=HOLD
+    int           followState;   // FOLLOW：0=ADJUST 1=CHASE 2=HOLD；PRESET：1=正在拉相位 2=已对齐
     double        lastStepSec;   // 最近一次落脚时刻
+    int           mode;          // kModeFollow / kModePreset
+    double        phaseOffset;   // PRESET：最近一次实测相位偏置（offset 单位，圆量）
+    double        delta;         // PRESET：当前 δ（叠在基准倍速上的临时偏差）
 
     Status()
         : cadenceSpm(0.0), multiplier(1.0), targetBpm(0.0), songSec(0.0),
-          steps(0), followState(0), lastStepSec(0.0) {}
+          steps(0), followState(0), lastStepSec(0.0),
+          mode(kModeFollow), phaseOffset(0.0), delta(0.0) {}
 };
 
 class StepPipeline {
@@ -81,13 +97,50 @@ public:
           sampleRateHz_(50.0),
           steps_(0),
           lastStepSec_(0.0),
-          curSongSec_(0.0) {
+          lastStepSecPrev_(0.0),
+          havePrevStep_(false),
+          curSongSec_(0.0),
+          mode_(kModeFollow),
+          songBpm_(0.0),
+          firstBeatSec_(0.0),
+          presetTargetBpm_(0.0),
+          trimMult_(1.0),
+          phaseOffset_(0.0) {
         det_.onStep(StepCallback(this));
     }
 
     /** 设置歌曲（BPM 与首拍），切歌时调 */
     void setSong(double songBpm, double firstBeatSec) {
+        songBpm_ = songBpm;
+        firstBeatSec_ = firstBeatSec;
         follower_.setSong(songBpm, firstBeatSec);
+    }
+
+    /**
+     * 选控制律。切换时清掉相位状态 —— 两个控制器的状态不能互相污染
+     * （docs：同一时刻只能有一个"相位所有者"）。
+     */
+    void setMode(int m) {
+        mode_ = (m == kModePreset) ? kModePreset : kModeFollow;
+        trim_.reset();
+        trimMult_ = 1.0;
+        phaseOffset_ = 0.0;
+    }
+
+    int mode() const { return mode_; }
+
+    /** PRESET 模式下的规定目标步频（曲线推进时随时更新） */
+    void setPresetTargetBpm(double bpm) {
+        presetTargetBpm_ = bpm;
+        // ★ PRESET 的语义是"音乐是主、人跟着跑"。所以要模拟一个**跟着鼓点跑的跑者**：
+        //   让模拟源按规定步频出步。
+        //   否则模拟源会固执地跑自己的步频 —— 那相位就没有不动点
+        //   （差多少漂多少），δ 会永远顶在限幅上，表现为"一直在拉相位"。
+        //   注意：这只影响**模拟演示源**。真实传感器进来的人本来就是跟着音乐跑的，
+        //   这一步对真实路径无意义。
+        if (mode_ == kModePreset && bpm > 0.0) {
+            sim_.setCadenceSpm(bpm);
+        }
     }
 
     /** 选择模拟场景（索引见 gaitsim::scenarios::at） */
@@ -95,11 +148,19 @@ public:
         sim_ = gaitsim::scenarios::makeSim(index);
     }
 
+    /** 直接换一个配好的模拟器（测试用：可以钉死一个"固执的跑者"做对照） */
+    void setSimulator(const gaitsim::GaitSim& s) {
+        sim_ = s;
+    }
+
     /** 整条管线复位（保留歌曲设置） */
     void reset() {
         det_.reset();
         sim_.reset();
         follower_.reset();
+        trim_.reset();
+        trimMult_ = 1.0;
+        phaseOffset_ = 0.0;
         clock_.clear();
         wallSec_ = 0.0;
         steps_ = 0;
@@ -127,12 +188,27 @@ public:
     Status status() const {
         Status st;
         st.cadenceSpm  = cadenceSpm_;
-        st.multiplier  = follower_.currentMultiplier();
-        st.targetBpm   = follower_.targetMultiplier();
         st.songSec     = curSongSec_;
         st.steps       = steps_;
-        st.followState = static_cast<int>(follower_.state());
         st.lastStepSec = lastStepSec_;
+        st.mode        = mode_;
+
+        if (mode_ == kModePreset) {
+            const double base = baseMultiplier();
+            st.multiplier  = clampMult(base * trimMult_);
+            // 与 FOLLOW 保持一致：这个字段装的是"目标倍速"（历史命名，不是 BPM）
+            st.targetBpm   = base;
+            // 1 = 正在拉相位（δ 还在动），2 = 已对齐（δ 已收回 0）
+            st.followState = trim_.engaged() ? 1 : 2;
+            st.phaseOffset = phaseOffset_;
+            st.delta       = trimMult_ - 1.0;
+        } else {
+            st.multiplier  = follower_.currentMultiplier();
+            st.targetBpm   = follower_.targetMultiplier();
+            st.followState = static_cast<int>(follower_.state());
+            st.phaseOffset = 0.0;
+            st.delta       = 0.0;
+        }
         return st;
     }
 
@@ -152,11 +228,44 @@ private:
 
     void onStep(const steplib::StepEvent& e) {
         ++steps_;
-        lastStepSec_ = e.timestamp;
-        cadenceSpm_  = e.cadence_spm;
+        cadenceSpm_ = e.cadence_spm;
         // ★ 回填：用脚步发生时刻去查歌曲位置，而不是"现在"
         const double songAtStep = clock_.songSecAt(e.timestamp, curSongSec_);
-        follower_.addFootstep(e.timestamp, songAtStep);
+
+        if (mode_ == kModePreset) {
+            // 预设模式：我们**不改**倍速去追步频（规定倍速是死的），
+            // 只量"拍点相对脚步错开多少"，让 PhaseTrim 叠一个有界 δ 把它折回 0。
+            //   r = 0    ⇒ 拍点正中踩在脚步上
+            //   r > 0    ⇒ 当前拍点偏晚（音乐慢了点，要稍微加快）
+            const double r = tempo::beatOffset(songAtStep, songBpm_, firstBeatSec_);
+            phaseOffset_ = r;
+            const double dtStep = (havePrevStep_ && e.timestamp > lastStepSecPrev_)
+                                      ? (e.timestamp - lastStepSecPrev_)
+                                      : 0.0;
+            // update() 返回 (1+δ)；δ 有界（|δ|<=deltaMax）且限速（slewPerSec），
+            // 不介入时会把 δ 平滑收回 0 ⇒ 长期平均速度严格等于规定倍速。
+            trimMult_ = trim_.update(r, dtStep);
+        } else {
+            follower_.addFootstep(e.timestamp, songAtStep);
+        }
+
+        lastStepSecPrev_ = e.timestamp;
+        havePrevStep_ = true;
+        lastStepSec_ = e.timestamp;
+    }
+
+    double clampMult(double m) const {
+        if (m < kMultMin) return kMultMin;
+        if (m > kMultMax) return kMultMax;
+        return m;
+    }
+
+    /** 规定倍速 = 规定步频 / 歌曲BPM（夹到上下限） */
+    double baseMultiplier() const {
+        if (presetTargetBpm_ > 0.0 && songBpm_ > 0.0) {
+            return clampMult(presetTargetBpm_ / songBpm_);
+        }
+        return 1.0;
     }
 
     steplib::StepDetector  det_;
@@ -167,8 +276,19 @@ private:
     double                 sampleRateHz_;
     std::uint64_t          steps_;
     double                 lastStepSec_;
+    double                 lastStepSecPrev_;
+    bool                   havePrevStep_;
     double                 curSongSec_;
     double                 cadenceSpm_ = 0.0;
+
+    // ---- 预设模式（开环 + PhaseTrim 微调）----
+    int                    mode_;
+    double                 songBpm_;
+    double                 firstBeatSec_;
+    double                 presetTargetBpm_;
+    bpmw::PhaseTrim        trim_;
+    double                 trimMult_;      // (1+δ)，未介入时是 1.0
+    double                 phaseOffset_;   // 最近一次实测相位偏置
 };
 
 } // namespace steprun

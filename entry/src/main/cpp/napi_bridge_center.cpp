@@ -7,6 +7,7 @@
 #include <ohaudio/native_audiostream_base.h>
 #include <ohaudio/native_audiostreambuilder.h>
 #include <thread>
+#include <condition_variable>
 #include "LiveStretchPlayer.h"
 #include "step_pipeline.hpp"   // 纯头：GaitSim → StepDetector → TempoFollower → 倍速
 #include <qos/qos.h>             // OH_QoS_SetThreadQoS：把音频生产线程提到交互级
@@ -27,10 +28,12 @@
 // 两端各只写自己的下标、用 acquire/release 配对传递数据，因此读端绝不阻塞 ——
 // 这是实时音频回调的硬要求（旧版用一把 fill_ 同时被两端读写，是数据竞争）。
 // ★ 契约：任一时刻只能各有一个生产者/消费者线程；不得从第三个线程调用 reset()。
-//   （多播放器共享本对象属于"全局单例"问题，不在本次修复范围。）
+//   ★ 现在**每个会话各持一份**（见 TsfnContext::ring）：原先全局一份时，两个会话
+//     会互相抢音频，接歌（尤其交叉淡化）根本不可能 —— 这正是 S1 会话化要解决的。
+const size_t kRingFloats = 48000 * 2 * 6;   // 6 秒立体声 PCM 容量（抗调度抖动）
 class PlaybackRingBuffer {
 public:
-    explicit PlaybackRingBuffer(size_t capacity)
+    explicit PlaybackRingBuffer(size_t capacity = kRingFloats)
         : buffer_(capacity + 1, 0.0f), capacity_(capacity + 1) {}   // 留一格区分「满/空」
 
     PlaybackRingBuffer(const PlaybackRingBuffer&) = delete;
@@ -122,25 +125,50 @@ struct TsfnContext {
     OH_AudioStreamBuilder* builder  = nullptr;
 
     int playerId;    //播放任务id
+
+    // ── ★ 会话私有状态（S1 会话化）────────────────────────────
+    //   ① 输出环形缓冲：每个会话一份。原来是全局一份 ⇒ 两个会话互相抢音频。
+    //      userData 也改成传本 ctx，声卡回调才知道读谁的缓冲。
+    PlaybackRingBuffer     ring;
+    int                    blockNum = 0;    // 已产出音频块数（进度回调预留）
+    //   ② 本会话的播放器指针（由 WorkerThread 用 RAII 注册/注销），
+    //      供 musicGetStatus(id) 读本会话的真实位置。
+    LiveStretchPlayer*     player = nullptr;
+    //   ③ 播放状态：musicGetStatus(id) 按 id 查这一份。原来是一组全局量，
+    //      "B 在后台准备"会把 A 的状态覆盖掉。
+    std::atomic<int>       playState{0};    // 0=idle 1=loading 2=ready 3=failed 4=prepared
+    std::atomic<long long> playFrames{0};
+    std::atomic<int>       playRate{0};
+    std::mutex             errMx;
+    std::string            error;
+    //   ④ ★ S2 预解码/起播分离：准备线程把"解码 + 建引擎 + 喂数据"干完后，
+    //      就停在这里等 musicStart(id) 的信号。收到后只做 Start + play()，
+    //      所以起播是**瞬时**的 —— 这也是接歌时"B 提前备好、到点立刻上"的前提。
+    std::mutex              startMx;
+    std::condition_variable startCv;
+    bool                    startRequested = false;
+
+    //   ⑤ ★ 起播延迟测量：**发 start 信号** → **第一块真音频回调**。
+    //      这个差值就是接歌硬切要的"提前量"：A 必须在 B 真正出声之前才淡出，
+    //      而 B 从收到信号到出声要跨一次 IPC，固定常数不准，所以直接量。
+    std::atomic<long long> startSignalMs{0};
+    std::atomic<long long> firstAudioMs{0};
 };
 
-struct music_data {
-    int block_num;
-    int32_t audioDataSize;
-    double accelerate = 1.0;
-
-};
+// （原 music_data / dataClip 已删除：它是个裸全局指针，speedChange 里无判空解引用
+//   在 dataClip 还没建好时闪退过一次（SIGSEGV@0x8）。倍速现在由 g_speed 承担，
+//   block_num 移进会话。）
 
 // ─── 全局任务管理器（用于按ID查找上下文） ───
 static std::unordered_map<int, TsfnContext *> g_downloadMap;
 static std::mutex g_mapMutex;
-static std::mutex g_dataMutex;                        // 保护 dataClip & ring buffer 并发访问
+static std::mutex g_dataMutex;                        // 保护共享状态的并发访问
 static int g_nextId = 1; 
-static music_data* dataClip = nullptr;
-// ★ 6 秒（原来是 2 秒）：给生产端留更多抗调度抖动余量。
-//   生产线程偶尔被抢走时间片时，2 秒的余量会被读空 ⇒ underrun（掉音）。
-static PlaybackRingBuffer g_ringBuffer(48000 * 2 * 6);   // 6秒立体声 PCM 容量 (576000 floats)
-static std::atomic<long long> g_lastCallbackMs;       //最后一次回调时间
+
+// ★ 倍速改成**全局一个原子量**：任意时刻所有在响的流必须用同一个倍速
+//   （两首歌的墙钟拍周期必须相同），所以它天生是"全局共享"而不是"每会话私有"。
+static std::atomic<double> g_speed{1.0};
+static std::atomic<long long> g_lastCallbackMs;       // 当前活动会话的最后一次回调时间
 bool g_isPlaybackFinished = false;
 
 // ─── 步频管线（"模拟演示"源）────────────────────────────────────────────
@@ -164,13 +192,17 @@ static const int kPlayIdle    = 0;
 static const int kPlayLoading = 1;
 static const int kPlayReady   = 2;
 static const int kPlayFailed  = 3;
+static const int kPlayPrepared = 4;   // S2：已解码建好，但还没起播
 
-static std::atomic<int>       g_playId{-1};
-static std::atomic<int>       g_playState{kPlayIdle};
-static std::atomic<long long> g_playFrames{0};
-static std::atomic<int>       g_playRate{0};
-static std::mutex             g_playErrMx;
-static std::string            g_playErr;
+// ★ 播放状态（state / frames / rate / error）已经搬进 TsfnContext，
+//   musicGetStatus(id) 按 id 查 —— 这样"B 在后台准备"不会覆盖 A 的状态。
+//   这里只留一份"最近一次失败"的兜底：失败会话会被 clear() 销毁，
+//   不留档的话页面只能看到 "gone"，真正的原因就被吃掉了。
+static std::mutex             g_lastFailMx;
+static int                    g_lastFailId = -1;
+static std::string            g_lastFailErr;
+// seek 进行中：此刻引擎被停、回调也停，播放循环的两把"结束判定"尺子都不准，要跳过
+static std::atomic<bool>      g_seeking{false};
 
 // ─── 编译优化自检 ─────────────────────────────────────────────────────
 //   -O0 下 signalsmith-stretch 达不到实时（生产线程跟不上声卡 ⇒ underrun 掉音）。
@@ -196,8 +228,15 @@ static OH_AudioData_Callback_Result OnWriteData_New(
     void* userData,
     void* buffer,
     int32_t bufferLen){
+        // ★ userData 就是本会话的 TsfnContext（见 AudioRendererInit）——
+        //   每个会话读自己的环形缓冲，互不干扰。
+        TsfnContext* ctx = static_cast<TsfnContext*>(userData);
+        if (ctx == nullptr) {
+            std::memset(buffer, 0, static_cast<size_t>(bufferLen));
+            return AUDIO_DATA_CALLBACK_RESULT_VALID;
+        }
         size_t floatCount = static_cast<size_t>(bufferLen) / sizeof(float);
-        size_t floatsRead = g_ringBuffer.read(static_cast<float*>(buffer), floatCount);
+        size_t floatsRead = ctx->ring.read(static_cast<float*>(buffer), floatCount);
         
 
 
@@ -247,7 +286,7 @@ static void AudioRenderer_BuilderRelease(OH_AudioRenderer* audioRenderer, OH_Aud
 }
 
 // 只创建并配置 builder；渲染器由 GenerateRenderer 生成，由调用方保存到自己的上下文里。
-static void AudioRendererInit(OH_AudioStreamBuilder*& builder){
+static void AudioRendererInit(OH_AudioStreamBuilder*& builder, void* userData){
     OH_LOG_INFO(LOG_APP, "Now Add AudioRenderer");
     // （原"事先清理"分支已删除：audioRenderer 是局部变量且从未被赋值，
     //   真正的清理由 AudioRenderer_BuilderRelease() 负责。）
@@ -271,11 +310,12 @@ static void AudioRendererInit(OH_AudioStreamBuilder*& builder){
     
     //注册三大回调函数
     OH_AudioRenderer_OnInterruptCallback OnInterruptCb = OnInterruptEvent_New;
-    OH_AudioStreamBuilder_SetRendererInterruptCallback(builder, OnInterruptCb, nullptr);
+    OH_AudioStreamBuilder_SetRendererInterruptCallback(builder, OnInterruptCb, userData);
     OH_AudioRenderer_OnErrorCallback OnErrorCb = OnError_New;
-    OH_AudioStreamBuilder_SetRendererErrorCallback(builder, OnErrorCb, nullptr);
+    OH_AudioStreamBuilder_SetRendererErrorCallback(builder, OnErrorCb, userData);
     OH_AudioRenderer_OnWriteDataCallback writeDataCb = OnWriteData_New;
-    OH_AudioStreamBuilder_SetRendererWriteDataCallback(builder, writeDataCb, nullptr);
+    // ★ userData = 本会话 ctx：让写数据回调能读到**自己**那份环形缓冲
+    OH_AudioStreamBuilder_SetRendererWriteDataCallback(builder, writeDataCb, userData);
 }
 
 static napi_value Add(napi_env env, napi_callback_info info)
@@ -760,15 +800,10 @@ static napi_value speedChange(napi_env env,napi_callback_info info){
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     napi_get_value_double(env, args[0], &speed);
-    // ★ 必须判空。dataClip 是播放线程里才建的对象，而解码 + 建引擎（要一次分配
-    //   零初始化几十 MB 的环形缓冲）可能要好几秒。上层（步频管线 / 界面滑条）
-    //   在起播后很快就会调到这里，那时 dataClip 还是 nullptr，
-    //   直接写 accelerate（结构体 offset = 8）就是 SIGSEGV @ 0x8。
-    if (dataClip == nullptr) {
-        OH_LOG_WARN(LOG_APP, "set speed %{public}fx ignored: dataClip not ready yet", speed);
-        return nullptr;
-    }
-    dataClip->accelerate = speed;
+    // ★ 倍速现在只是一个全局原子量，不存在"对象还没建好"的问题 ——
+    //   原来这里写的是 dataClip->accelerate，dataClip 是播放线程里才 new 的，
+    //   起播后上层立刻调过来就会 nullptr 解引用（SIGSEGV@0x8）。
+    g_speed.store(speed, std::memory_order_relaxed);
     OH_LOG_INFO(LOG_APP, "set speed to %{public}fx", speed);
     return nullptr;
 }
@@ -805,6 +840,36 @@ static OH_AudioRenderer* rendererForId(int id) {
     return (it != g_downloadMap.end()) ? it->second->renderer : nullptr;
 }
 
+/**
+ * 发"起播"信号给某个会话 —— native 侧唯一的起播入口。
+ * 三件事必须一起做，少一件都会出问题：
+ *   ① 置位 startRequested（准备线程的谓词）
+ *   ② 复位 firstAudioMs 并记下 startSignalMs（本次起播重新计时）
+ *   ③ notify（如果线程还没进 wait，谓词已为真，不会漏）
+ * @return 找不到会话时 false
+ */
+static bool signalStartById(int id) {
+    TsfnContext* c = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mapMutex);
+        auto it = g_downloadMap.find(id);
+        if (it != g_downloadMap.end()) {
+            c = it->second;
+        }
+    }
+    if (c == nullptr) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(c->startMx);
+        c->startRequested = true;
+        c->firstAudioMs.store(0, std::memory_order_relaxed);
+        c->startSignalMs.store(nowMs(), std::memory_order_relaxed);
+    }
+    c->startCv.notify_all();
+    return true;
+}
+
 
 
 static void WorkerThread(TsfnContext *ctx, char filePath[]){
@@ -822,21 +887,27 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         OH_LOG_ERROR(LOG_APP, "[play] 解码失败，放弃播放: frames=%{public}d rate=%{public}d",
                      audio_processor.total_frame, audio_processor.sample_rate);
         {
-            std::lock_guard<std::mutex> lk(g_playErrMx);
-            g_playErr = "解码失败（frames=" + std::to_string(audio_processor.total_frame)
-                      + ", rate=" + std::to_string(audio_processor.sample_rate)
-                      + "）：文件可能是空的/损坏，或该编码没编进 .so";
+            std::lock_guard<std::mutex> lk(ctx->errMx);
+            ctx->error = "解码失败（frames=" + std::to_string(audio_processor.total_frame)
+                       + ", rate=" + std::to_string(audio_processor.sample_rate)
+                       + "）：文件可能是空的/损坏，或该编码没编进 .so";
         }
-        g_playState.store(kPlayFailed, std::memory_order_release);
+        ctx->playState.store(kPlayFailed, std::memory_order_release);
+        // clear(ctx) 之后这个会话就没了，失败原因留一份到全局兜底
+        {
+            std::lock_guard<std::mutex> lk(g_lastFailMx);
+            g_lastFailId = ctx->playerId;
+            g_lastFailErr = ctx->error;
+        }
         clear(ctx);
         return;
     }
 
     // 解码成功：先把真实结果回报出去（音乐页据此判断"能播"）
-    g_playFrames.store(audio_processor.total_frame, std::memory_order_relaxed);
-    g_playRate.store(audio_processor.sample_rate, std::memory_order_relaxed);
+    ctx->playFrames.store(audio_processor.total_frame, std::memory_order_relaxed);
+    ctx->playRate.store(audio_processor.sample_rate, std::memory_order_relaxed);
 
-    AudioRendererInit(ctx->builder);                 //初始化（只建 builder）
+    AudioRendererInit(ctx->builder, ctx);            //初始化（只建 builder；ctx 作为回调 userData）
 
     
     // 渲染器/构建器保存在 ctx 里，不再往全局数组里塞
@@ -854,6 +925,11 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
 
     // ★ 把音频生产线程提到交互级。否则它和 UI/JS/管线线程抢 CPU 时会被压后，
     //   声卡回调就取不到数据（日志里的 "underrun: need N, got 0"）。
+    // seek 时清掉输出环形缓冲里 seek 之前的残留（最多 6 秒旧位置音频）。
+    // 这个回调在 seekTo() 内部 stop() 之后被调用 —— 那一刻生产线程已停，
+    // 而 musicSeek() 也把声卡 Pause 了，两端都停着，满足 reset() 的前置条件。
+    player.setSeekResetCallback([ctx]() { ctx->ring.reset(); });
+
     player.setThreadStartCallback([]() {
         // QoS 分级尝试：QOS_USER_INTERACTIVE 在非"驻留应用"上可能被拒（实测 ret=-1），
         // 依次降级，用第一个成功的。全失败也只是少一层保险（-O2 + 6 秒缓冲才是主力）。
@@ -869,17 +945,17 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         }
         OH_LOG_WARN(LOG_APP, "[play] 音频线程 QoS 各级都被拒，靠 -O2 + 缓冲余量兜底");
     });
-    if (dataClip == nullptr) {
-        dataClip = new music_data();
-    }
-    {
-        std::lock_guard<std::mutex> lock(g_dataMutex);
-        dataClip->block_num = 0;
-    }
+    ctx->blockNum = 0;                   // 本会话的音频块计数（原 dataClip->block_num）
+
     player.setSilenceOnPause(false);      // ★ 暂停期间不产生任何回调数据
 
     player.setAudioCallback([&ctx](const float* data, int frame, int ch) {
         g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
+        // ★ 本会话第一块数据回调的时刻（只在起播后第一次记）。
+        //   firstAudioMs - startSignalMs = "发信号到真出声"的延迟，页面拿它当硬切提前量。
+        if (ctx->firstAudioMs.load(std::memory_order_relaxed) == 0) {
+            ctx->firstAudioMs.store(nowMs(), std::memory_order_relaxed);
+        }
         
         if(ctx->paused.load(std::memory_order_relaxed)){return;};            //暂停时丢弃本块
         int sampleCount = frame * ch;      //本块采样总数
@@ -897,8 +973,9 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
             }
         }
         {
-            g_ringBuffer.write(ctx->g_interleavedBuf.data(), static_cast<size_t>(ctx->g_interleavedBuf.size()));
-            dataClip->block_num += 1;
+            ctx->ring.write(ctx->g_interleavedBuf.data(),
+                            static_cast<size_t>(ctx->g_interleavedBuf.size()));
+            ctx->blockNum += 1;
         }
 
     });
@@ -907,12 +984,37 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     // ★ 引擎已把数据拷进自己的环形缓冲（loadAudio 文档明确写了"调用后可以释放 data"），
     //   这里把解码缓冲还掉：162s/48k/立体声约 186MB，不还的话峰值内存翻倍 ⇒ 模拟器容易 OOM。
     audio_processor.release_buffers();
+
+    // ═══ S2：准备完毕，等 musicStart(id) 的信号 ═══
+    //   解码 + 建引擎这几秒都耗在上面了；一收到信号只做 Start + play()，
+    //   所以**起播是瞬时的**（页面按播放不用再等几秒）。
+    ctx->playState.store(kPlayPrepared, std::memory_order_release);
+    OH_LOG_INFO(LOG_APP, "[play] 已就绪，等待 start 信号: id=%{public}d", ctx->playerId);
+    {
+        std::unique_lock<std::mutex> slk(ctx->startMx);
+        ctx->startCv.wait(slk, [ctx]() {
+            return ctx->startRequested || ctx->cancelled.load(std::memory_order_relaxed);
+        });
+        if (ctx->cancelled.load(std::memory_order_relaxed)) {
+            OH_LOG_INFO(LOG_APP, "[play] 起播前被取消: id=%{public}d", ctx->playerId);
+            slk.unlock();
+            clear(ctx);      // 释放渲染器/构建器 + TSFN（播放器还没注册，无需注销）
+            return;
+        }
+    }
+
+    // ★ 起播延迟的计时**起点在这里**，不在"发信号"那一刻。
+    //   music_play 是"先建会话、再发信号"，发信号时 worker 往往还在解码；
+    //   拿发信号的时间当起点，会把整个解码耗时刻进"起播延迟"里（几秒！），
+    //   页面照着这个数提前就完全错了。这里才是"开始起播动作"的那一刻。
+    ctx->startSignalMs.store(nowMs(), std::memory_order_relaxed);
+
     OH_AudioRenderer_Start(ctx->renderer);                  //开始播放
 
     player.play();                                     //加载音频流
     g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);         //获取当前回调时间
     // ★ 到这里才算"就绪"（渲染器已起、音频线程已跑），页面在此之前显示"加载中…"
-    g_playState.store(kPlayReady, std::memory_order_release);
+    ctx->playState.store(kPlayReady, std::memory_order_release);
 
     // ★ 把"当前正在播的播放器"暴露给步频管线，供它读歌曲位置（脚步回填用）。
     //   用 RAII：WorkerThread 无论从哪条路径退出（自然结束 / cancel / 异常）
@@ -921,21 +1023,34 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     //   （仍有一个微秒级窗口：管线可能刚取到指针，player 就析构了；
     //     演示阶段可接受，正式版应由会话对象统一持有。）
     struct LivePlayerReg {
-        LivePlayerReg(LiveStretchPlayer* p, int sr) {
-            g_liveSampleRate.store(sr, std::memory_order_relaxed);
-            g_livePlayer.store(p, std::memory_order_release);
+        TsfnContext*       ctx_;
+        LiveStretchPlayer* p_;      // 自己当初登记进去的那个指针
+        explicit LivePlayerReg(TsfnContext* c) : ctx_(c), p_(c->player) {
+            g_liveSampleRate.store(c->playRate.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+            g_livePlayer.store(c->player, std::memory_order_release);
         }
         ~LivePlayerReg() {
-            g_livePlayer.store(nullptr, std::memory_order_release);
-            // 退出（自然播完 / 取消）后回到 idle，页面据此冻结位置、不再回填
-            g_playState.store(kPlayIdle, std::memory_order_release);
+            // ★ 只在"当前登记的确实是自己"时才清空。
+            //   接歌硬切时 A、B 会短暂同时活着： B 先 Start、A 过 100ms 才停。
+            //   原来无条件置空 ⇒ A 退出时把 B 的登记抹掉，步频管线当场丢了驱动对象，
+            //   表现为"刚切完歌倍速就不动了"。
+            LiveStretchPlayer* expect = p_;
+            g_livePlayer.compare_exchange_strong(expect, nullptr,
+                                                 std::memory_order_release);
+            if (ctx_ != nullptr) {
+                ctx_->player = nullptr;
+                // 退出（自然播完 / 取消）后回到 idle，页面据此冻结位置、不再回填
+                ctx_->playState.store(kPlayIdle, std::memory_order_release);
+            }
         }
     };
-    LivePlayerReg liveReg(&player, audio_processor.sample_rate);
+    ctx->player = &player;      // 让 musicGetStatus(id) 能读**本会话**的真实位置
+    LivePlayerReg liveReg(ctx);
 
     //播放器循环
     while(!finished && !quit){
-        player.setSpeed(dataClip->accelerate);
+        player.setSpeed(g_speed.load(std::memory_order_relaxed));
         if(ctx->cancelled.load()){
             quit = true;
             OH_AudioRenderer_Stop(ctx->renderer);
@@ -970,13 +1085,16 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
         long long last = g_lastCallbackMs.load(std::memory_order_relaxed);
 
         if(!finished && !quit){
-            // ★ 首选判据：引擎自己的音频线程已经退出 ⇒ 数据确实放完了。
-            //   这比"500ms 没有回调"这种时间启发式可靠（后者在恢复播放、卡顿、
-            //   声卡异常时都会误判，之前的"暂停后响一下就没声"就是这么来的）。
-            const bool drained = !player.isRunning();
+            // ★ 首选判据：引擎数据**真的放完了**（process() 返回 0 才会置 finished_）。
+            //   ⚠️ 绝对不能用 isRunning()：seekTo() 内部第一步就是 stop()，
+            //   那一瞬间 running_ 变 false，会被误判成"播放结束"，进而
+            //   OH_AudioRenderer_Stop + clear(ctx) 把会话和渲染器提前释放掉
+            //   —— 那正是"拖进度条就卡死/没声"的成因。
+            const bool drained = player.isFinished();
             // 兜底：未暂停但长时间没有回调（正常路径下不再需要）
             const bool silentTooLong = (last > 0) && !ctx->paused.load() && ((nowMs() - last) > 500);
-            if (drained || silentTooLong) {
+            // ★ seek 期间两把尺子都不准（引擎被停、回调也停），直接跳过这一轮
+            if (!g_seeking.load(std::memory_order_relaxed) && (drained || silentTooLong)) {
                 OH_LOG_INFO(LOG_APP, "[play] 播放结束 (drained=%{public}d silent=%{public}d)",
                             drained ? 1 : 0, silentTooLong ? 1 : 0);
                 finished = true;
@@ -1014,13 +1132,16 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
 
 
 static void CallJSCallback(napi_env env, napi_value jsCallback, void *context, void *data){
-    if(dataClip == nullptr)
+    // 进度回调目前未启用（WorkerThread 里那段调用是注释掉的）。
+    // dataClip 已删除，这里不再依赖任何全局播放对象。
+    if (data == nullptr) {
         return;
-    std::lock_guard<std::mutex> lock(g_dataMutex);
-    music_data* callBackData = static_cast<music_data *>(dataClip);
+    }
 
+    // dataClip 已删除；这个回调的调用点本身是注释掉的（进度回传未启用），
+    // 这里回 0，保证再也不碰任何全局播放对象。
     napi_value music_data = nullptr;
-    napi_create_int32(env, callBackData->block_num, &music_data);
+    napi_create_int32(env, 0, &music_data);
     //回调
     napi_value global = nullptr;
     napi_get_global(env, &global);
@@ -1082,6 +1203,119 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+/**
+ * music_seek(id, sec) —— 跳到歌曲的 sec 秒处继续播。
+ *   顺序要点：先把声卡 Pause（停消费端），再 seekTo（内部停生产端 → 清环形缓冲
+ *   → 从新位置重新喂入），最后 Start 声卡。这样不会先播出 seek 之前残留的那段。
+ */
+static napi_value musicSeek(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    int32_t id = -1;
+    double  sec = 0.0;
+    if (argc >= 1) napi_get_value_int32(env, args[0], &id);
+    if (argc >= 2) napi_get_value_double(env, args[1], &sec);
+
+    LiveStretchPlayer* pl = g_livePlayer.load(std::memory_order_acquire);
+    const int sr = g_liveSampleRate.load(std::memory_order_relaxed);
+    if (pl == nullptr || sr <= 0 || !(sec >= 0.0)) {
+        OH_LOG_WARN(LOG_APP, "[play] seek ignored: hasPlayer=%{public}d sr=%{public}d sec=%{public}.3f",
+                    pl != nullptr ? 1 : 0, sr, sec);
+        return nullptr;
+    }
+
+    OH_AudioRenderer* r = rendererForId(id);
+    if (r != nullptr) {
+        OH_AudioRenderer_Pause(r);          // 停消费端
+    }
+
+    // ★ 告诉播放循环"正在 seek，别做结束判定"：
+    //   seekTo() 会 stop() 音频线程（running_ 变 false），回调也随之停止，
+    //   两把判据都会误判成"播放结束"并把会话释放掉。
+    g_seeking.store(true, std::memory_order_release);
+    const long long frame = static_cast<long long>(sec * static_cast<double>(sr));
+    const bool ok = pl->seekTo(frame);
+    g_seeking.store(false, std::memory_order_release);
+
+    // seek 期间没有回调，刷新时间基准，免得恢复瞬间被 500ms 兜底判据误判
+    g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);
+
+    if (r != nullptr) {
+        // ★ 关键：丢掉音频服务里**已经排队**的那一段（约等于一次回调的量，~93ms）。
+        //   Pause 只是"停住"，Start 之后服务会先把这段**旧位置**的数据吐出来 ——
+        //   听感就是"先响一小段拖动前的音频，才到新位置"。
+        //   我们清的是自己那份环形缓冲，管不到服务内部的队列，所以必须 Flush。
+        const OH_AudioStream_Result fr = OH_AudioRenderer_Flush(r);
+        if (fr != AUDIOSTREAM_SUCCESS) {
+            OH_LOG_WARN(LOG_APP, "[play] seek: Flush 返回 %{public}d（非 0 = 旧数据没清掉）",
+                        static_cast<int>(fr));
+        }
+        OH_AudioRenderer_Start(r);          // 重新开始消费
+    }
+
+    OH_LOG_INFO(LOG_APP, "[play] seek -> %{public}.3fs (frame=%{public}lld) %{public}s",
+                sec, frame, ok ? "OK" : "FAILED");
+    return nullptr;
+}
+
+/**
+ * music_set_speed(id, speed) —— 设置倍速。
+ *   倍速是**全局**的：同时出声的所有流必须共用同一个倍速（两首歌的墙钟拍周期
+ *   必须相同），所以它天生共享；id 只用来校验会话存在并打日志。
+ */
+static napi_value musicSetSpeed(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t id = -1;
+    double  speed = 1.0;
+    if (argc >= 1) napi_get_value_int32(env, args[0], &id);
+    if (argc >= 2) napi_get_value_double(env, args[1], &speed);
+    if (!(speed > 0.0)) {
+        return nullptr;
+    }
+    if (rendererForId(id) == nullptr) {
+        return nullptr;         // 会话不在，忽略
+    }
+    g_speed.store(speed, std::memory_order_relaxed);
+    return nullptr;
+}
+
+/**
+ * music_set_volume(id, volume, rampMs) —— 设置本会话的输出音量（可带斜坡）。
+ *
+ * ★ 这是交叉淡化（S4）的钥匙：每个 OH_AudioRenderer 各自是一条音频流，
+ *   系统负责混音 —— 只要给 A、B 各来一条音量斜坡就是淡化，**不用自写 Mixer**。
+ *   rampMs > 0 走 SetVolumeWithRamp（平滑过渡），= 0 走 SetVolume（立即）。
+ */
+static napi_value musicSetVolume(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t id = -1;
+    double  volume = 1.0;
+    int32_t rampMs = 0;
+    if (argc >= 1) napi_get_value_int32(env, args[0], &id);
+    if (argc >= 2) napi_get_value_double(env, args[1], &volume);
+    if (argc >= 3) napi_get_value_int32(env, args[2], &rampMs);
+
+    OH_AudioRenderer* r = rendererForId(id);
+    if (r == nullptr) {
+        return nullptr;
+    }
+    if (volume < 0.0) volume = 0.0;
+    if (volume > 1.0) volume = 1.0;
+
+    const OH_AudioStream_Result res = (rampMs > 0)
+        ? OH_AudioRenderer_SetVolumeWithRamp(r, static_cast<float>(volume), rampMs)
+        : OH_AudioRenderer_SetVolume(r, static_cast<float>(volume));
+    OH_LOG_INFO(LOG_APP, "[play] volume id=%{public}d v=%{public}.3f ramp=%{public}dms -> %{public}d",
+                id, volume, rampMs, static_cast<int>(res));
+    return nullptr;
+}
+
 static napi_value musicCancel(napi_env env, napi_callback_info info) {             // 先Release audio Render 再 musicCancel
     size_t argc = 1;
     napi_value args[1];
@@ -1097,12 +1331,20 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
     }
 
 
-    std::lock_guard<std::mutex> lock(g_mapMutex);
-    auto it = g_downloadMap.find(id);
-    if (it != g_downloadMap.end()) {
-        it->second->cancelled.store(true);
-        it->second->paused.store(false); 
-        OH_LOG_INFO(LOG_APP, "[NAPI] Download %{public}d cancelled", id);
+    TsfnContext* dead = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mapMutex);
+        auto it = g_downloadMap.find(id);
+        if (it != g_downloadMap.end()) {
+            it->second->cancelled.store(true);
+            it->second->paused.store(false);
+            dead = it->second;
+            OH_LOG_INFO(LOG_APP, "[NAPI] Download %{public}d cancelled", id);
+        }
+    }
+    // ★ 若这个会话还停在"已就绪、等 start 信号"的等待里，叫醒它让它自己退出
+    if (dead != nullptr) {
+        dead->startCv.notify_all();
     }
 
     return nullptr;
@@ -1114,7 +1356,8 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
 
 
 
-static napi_value musicPlay(napi_env env, napi_callback_info info){
+// 建会话 + 起准备线程。autoStart=false 时不发 start 信号，停在"已就绪"等 musicStart(id)。
+static napi_value playImpl(napi_env env, napi_callback_info info, bool autoStart) {
     OH_LOG_INFO(LOG_APP, "[NAPI] Now loading music play");
     logBuildOptimization();
     size_t argc = 2;
@@ -1148,14 +1391,13 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
         g_downloadMap[ctx->playerId] = ctx;
 
         // 新任务开始：状态复位为"加载中"
-        g_playId.store(ctx->playerId, std::memory_order_relaxed);
-        g_playFrames.store(0, std::memory_order_relaxed);
-        g_playRate.store(0, std::memory_order_relaxed);
+        ctx->playFrames.store(0, std::memory_order_relaxed);
+        ctx->playRate.store(0, std::memory_order_relaxed);
         {
-            std::lock_guard<std::mutex> elk(g_playErrMx);
-            g_playErr.clear();
+            std::lock_guard<std::mutex> elk(ctx->errMx);
+            ctx->error.clear();
         }
-        g_playState.store(kPlayLoading, std::memory_order_release);
+        ctx->playState.store(kPlayLoading, std::memory_order_release);
         
     }
     
@@ -1170,17 +1412,21 @@ static napi_value musicPlay(napi_env env, napi_callback_info info){
                                     nullptr,
                                     CallJSCallback,       //主线程真正的回调
                                     &ctx->tsfn);
-    // ★ 在**主线程（JS 线程）**先把 dataClip 建好：music_play 一返回，
-    //   上层任何 changeSpeed 都不会再撞上 nullptr（判空仍在，作为第二道防线）。
-    //   播放线程里那次创建保留作兜底。
-    if (dataClip == nullptr) {
-        dataClip = new music_data();
-    }
+    // （原"在主线程先建 dataClip"已不需要：倍速现在是全局原子量 g_speed，
+    //   不存在对象尚未创建的问题。）
 
     ctx->worker = std::thread(WorkerThread, ctx, buf);
     OH_LOG_INFO(LOG_APP, "Add sub thread");
     ctx->worker.detach();
     
+    // ★ S2：music_play 走 autoStart=true，建完会话立刻起播；
+    //   music_prepare 走 false，会话停在"已就绪、不出声"，等 musicStart(id)。
+    //   这里必然有 ctx，直接置位 + 唤醒（唤醒晚于置位也没关系，谓词已经为真）。
+    if (autoStart) {
+        signalStartById(ctx->playerId);
+        OH_LOG_INFO(LOG_APP, "[play] start 信号 -> id=%{public}d", ctx->playerId);
+    }
+
     napi_value progressId;
     napi_create_int32(env, ctx->playerId, &progressId);
     return progressId;
@@ -1217,6 +1463,9 @@ static std::string stepStatusJson() {
        << ",\"followState\":" << st.followState
        << ",\"lastStepSec\":" << st.lastStepSec
        << ",\"songSec\":" << st.songSec
+       << ",\"mode\":" << st.mode
+       << ",\"phaseOffset\":" << st.phaseOffset
+       << ",\"delta\":" << st.delta
        << ",\"hasPlayer\":" << (g_livePlayer.load() != nullptr ? "true" : "false")
        << "}";
     return os.str();
@@ -1243,26 +1492,29 @@ static void StepWorkerThread() {
         }
 
         // 把倍速塞进现有播放链路：WorkerThread 每轮读 accelerate 并 player.setSpeed()。
-        // 判空是必须的：dataClip 由 WorkerThread 创建，这里可能还没有。
-        if (dataClip != nullptr) {
-            dataClip->accelerate = mult;
-        }
+        // 把倍速塞进播放链路。现在就是一个全局原子量，不需要任何判空 ——
+        // 播放循环每轮读 g_speed 并 player.setSpeed()。
+        g_speed.store(mult, std::memory_order_relaxed);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
 static napi_value stepPipelineStart(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3] = {nullptr};
+    size_t argc = 5;
+    napi_value args[5] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     int32_t scenario = 0;
-    double songBpm = 150.0;
-    double firstBeat = 0.0;
+    double  songBpm = 150.0;
+    double  firstBeat = 0.0;
+    int32_t mode = 0;          // 0 = FOLLOW（动态模式）  1 = PRESET（恒速/曲线）
+    double  targetBpm = 0.0;   // PRESET 用：规定目标步频
     if (argc >= 1) napi_get_value_int32(env, args[0], &scenario);
     if (argc >= 2) napi_get_value_double(env, args[1], &songBpm);
     if (argc >= 3) napi_get_value_double(env, args[2], &firstBeat);
+    if (argc >= 4) napi_get_value_int32(env, args[3], &mode);
+    if (argc >= 5) napi_get_value_double(env, args[4], &targetBpm);
 
     if (g_stepRunning.load()) {
         OH_LOG_INFO(LOG_APP, "[step] already running, ignore start");
@@ -1270,14 +1522,30 @@ static napi_value stepPipelineStart(napi_env env, napi_callback_info info) {
     }
     {
         std::lock_guard<std::mutex> lk(g_stepMutex);
+        // 顺序要紧：先选控制律（会清掉相位状态）→ 重置 → 设歌 → 设规定步频
+        g_stepPipeline.setMode(mode);
         g_stepPipeline.setScenario(scenario);
         g_stepPipeline.reset();
-        g_stepPipeline.setSong(songBpm, firstBeat);   // reset 之后再设歌，避免被清掉
+        g_stepPipeline.setSong(songBpm, firstBeat);
+        g_stepPipeline.setPresetTargetBpm(targetBpm);
     }
     g_stepRunning.store(true);
     g_stepThread = std::thread(StepWorkerThread);
-    OH_LOG_INFO(LOG_APP, "[step] started: scenario=%{public}d songBpm=%{public}.1f firstBeat=%{public}.2f",
-                scenario, songBpm, firstBeat);
+    OH_LOG_INFO(LOG_APP, "[step] started: mode=%{public}d scenario=%{public}d songBpm=%{public}.1f "
+                         "firstBeat=%{public}.2f targetBpm=%{public}.1f",
+                mode, scenario, songBpm, firstBeat, targetBpm);
+    return nullptr;
+}
+
+/** PRESET 模式的规定目标步频（曲线推进 / 恒速滑条改动时调用） */
+static napi_value stepPipelineSetTargetBpm(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    double bpm = 0.0;
+    if (argc >= 1) napi_get_value_double(env, args[0], &bpm);
+    std::lock_guard<std::mutex> lk(g_stepMutex);
+    g_stepPipeline.setPresetTargetBpm(bpm);
     return nullptr;
 }
 
@@ -1331,36 +1599,115 @@ static napi_value musicGetStatus(napi_env env, napi_callback_info info) {
         napi_get_value_int32(env, args[0], &id);
     }
 
-    const int state = g_playState.load(std::memory_order_acquire);
-    const bool sameTask = (g_playId.load(std::memory_order_relaxed) == id);
-    static const char* kStateNames[4] = {"idle", "loading", "ready", "failed"};
-    const std::string stateName = sameTask ? std::string(kStateNames[state & 3]) : std::string("gone");
-
-    const int rate = g_playRate.load(std::memory_order_relaxed);
-    double posSec = 0.0;
-    LiveStretchPlayer* pl = g_livePlayer.load(std::memory_order_acquire);
-    if (pl != nullptr && rate > 0) {
-        posSec = static_cast<double>(pl->getInputPosition()) / static_cast<double>(rate);
+    // ★ 按 id 查**本会话**的状态（不是全局）：这样"B 在后台准备"不会覆盖 A。
+    TsfnContext* c = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_mapMutex);
+        auto it = g_downloadMap.find(id);
+        if (it != g_downloadMap.end()) {
+            c = it->second;
+        }
     }
 
+    static const char* kStateNames[5] = {"idle", "loading", "ready", "failed", "prepared"};
+    bool      sameTask = (c != nullptr);
+    int       state    = kPlayIdle;
+    int       rate     = 0;
+    long long frames   = 0;
     std::string err;
-    if (sameTask && state == kPlayFailed) {
-        std::lock_guard<std::mutex> lk(g_playErrMx);
-        err = g_playErr;
+
+    if (sameTask) {
+        state  = c->playState.load(std::memory_order_acquire);
+        rate   = c->playRate.load(std::memory_order_relaxed);
+        frames = c->playFrames.load(std::memory_order_relaxed);
+        if (state == kPlayFailed) {
+            std::lock_guard<std::mutex> lk(c->errMx);
+            err = c->error;
+        }
+    } else {
+        // 会话已不在。如果是"解码失败后被 clear 掉的"，从失败档里把原因捞回来，
+        // 否则页面只能看到 "gone"，真正的原因就被吃掉了。
+        std::lock_guard<std::mutex> lk(g_lastFailMx);
+        if (g_lastFailId == id) {
+            sameTask = true;
+            state    = kPlayFailed;
+            err      = g_lastFailErr;
+        }
+    }
+    const std::string stateName = sameTask ? std::string(kStateNames[state % 5]) : std::string("gone");
+
+    double posSec = 0.0;
+    if (c != nullptr && c->player != nullptr && rate > 0) {
+        posSec = static_cast<double>(c->player->getInputPosition()) / static_cast<double>(rate);
+    }
+
+    // ★ 真实音频总长（秒）= 解码帧数 ÷ 采样率。
+    //   比 song_data.json 里的 end 可靠 —— 那是分析区间，这是文件真正的结尾。
+    //   自动接歌就靠 posSec 和它比："还剩多少"。
+    const double durSec = (rate > 0)
+        ? (static_cast<double>(frames) / static_cast<double>(rate)) : 0.0;
+
+    // ★ 起播延迟（毫秒）= 发 start 信号 → 第一块真音频回调。
+    //   硬切时"提前多久按 start"就填它（-1 = 还没测到 / 还没起播）。
+    long long startLatencyMs = -1;
+    if (c != nullptr) {
+        const long long s0 = c->startSignalMs.load(std::memory_order_relaxed);
+        const long long s1 = c->firstAudioMs.load(std::memory_order_relaxed);
+        if (s0 > 0 && s1 >= s0) {
+            startLatencyMs = s1 - s0;
+        }
     }
 
     std::ostringstream os;
     os << "{\"ok\":" << (sameTask ? "true" : "false")
        << ",\"state\":\"" << stateName << "\""
-       << ",\"frames\":" << static_cast<long long>(g_playFrames.load(std::memory_order_relaxed))
+       << ",\"frames\":" << frames
        << ",\"rate\":" << rate
        << ",\"posSec\":" << posSec
+       << ",\"durSec\":" << durSec
+       << ",\"startLatencyMs\":" << startLatencyMs
        << ",\"error\":\"" << jsonEscape(err) << "\"}";
 
     const std::string s = os.str();
     napi_value out = nullptr;
     napi_create_string_utf8(env, s.c_str(), s.size(), &out);
     return out;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//   S2：预解码（prepare）与起播（start）分离
+//
+//   music_play(path, cb)     = prepare + start（旧接口，兼容）
+//   music_prepare(path, cb)  = 只解码建引擎，返回 id，不出声
+//   music_start(id)          = 对已就绪的会话发信号，瞬时起播
+//
+//   接歌场景：B 的 prepare 提前发出去耗几秒解码，等播到 A 的交接点
+//   只调 music_start(B) —— 那一瞬间只做 Start + play()，就没有 IPC 空档。
+// ═════════════════════════════════════════════════════════════════════
+
+static napi_value musicPlay(napi_env env, napi_callback_info info) {
+    return playImpl(env, info, true);      // 旧接口：建会话 + 立刻起播
+}
+
+static napi_value musicPrepare(napi_env env, napi_callback_info info) {
+    // 复用 playImpl 的解析逻辑，只是不发 start 信号（autoStart=false）。
+    return playImpl(env, info, false);
+}
+
+static napi_value musicStart(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t id = -1;
+    if (argc >= 1 && args[0] != nullptr) {
+        napi_get_value_int32(env, args[0], &id);
+    }
+    if (!signalStartById(id)) {
+        OH_LOG_ERROR(LOG_APP, "[play] music_start: 找不到会话 id=%{public}d", id);
+        return nullptr;
+    }
+    OH_LOG_INFO(LOG_APP, "[play] music_start 信号 -> id=%{public}d", id);
+    return nullptr;
 }
 
 EXTERN_C_START
@@ -1374,8 +1721,13 @@ static napi_value Init(napi_env env, napi_value exports)
         {"squire", nullptr, Squire, nullptr,nullptr,nullptr, napi_default, nullptr},
         {"test_audio", nullptr, test_audio, nullptr, nullptr,nullptr, napi_writable, nullptr},
         {"music_play", nullptr, musicPlay, nullptr, nullptr, nullptr, napi_writable, nullptr},
+        {"music_prepare", nullptr, musicPrepare, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"music_start", nullptr, musicStart, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"music_resume", nullptr, musicResume, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"music_cancel", nullptr, musicCancel, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"music_seek", nullptr, musicSeek, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"music_set_speed", nullptr, musicSetSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"music_set_volume", nullptr, musicSetVolume, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"music_pause", nullptr, musicPause, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"changeSpeed", nullptr, speedChange, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"musicAnalyse", nullptr, analyzeMusic, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1388,6 +1740,7 @@ static napi_value Init(napi_env env, napi_value exports)
         {"stepPipelineStop", nullptr, stepPipelineStop, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stepPipelineSetScenario", nullptr, stepPipelineSetScenario, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stepPipelineStatus", nullptr, stepPipelineStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stepPipelineSetTargetBpm", nullptr, stepPipelineSetTargetBpm, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ★ 原生播放状态：加载中/就绪/失败 + 真实歌曲位置
         {"musicGetStatus", nullptr, musicGetStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
     };

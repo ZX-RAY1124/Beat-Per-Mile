@@ -37,8 +37,31 @@ export const SONG_DATA_NAME: string = 'song_data.json';
 /** 倍速上下限（与 TempoFollower 默认一致） */
 const MULT_MIN: number = 0.50;
 const MULT_MAX: number = 2.00;
-/** 倍速平滑时间常数（秒），对齐 TempoFollower.tau */
-const TAU_SPEED: number = 2.0;
+/**
+ * 倍速平滑时间常数（秒），**按模式取**。
+ *
+ * 动态模式沿用 TempoFollower.tau = 2.0：步频本身是抖的，倍速必须平滑，
+ * 否则每个脚步都会让音乐一顿一顿。（而且动态模式接上 native 管线后，
+ * 倍速其实由管线直接覆盖，这个常数基本不参与。）
+ *
+ * ★ 恒速/曲线的目标是**规定值**（你拖的滑条 / 你画的曲线），没有任何需要滤掉的抖动。
+ *   再套 2 秒就只是拖沓 —— 指数逼近要 ~6 秒才到 99%，手感就是"半天才变过去"。
+ *   所以这两个模式用很小的时间常数：恒速 0.25s（≈0.75s 到 95%，1 秒内到位），
+ *   曲线 0.4s（段切换留一点点过渡，避免速度硬阶跃）。
+ */
+const TAU_SPEED_DYNAMIC: number = 2.0;
+const TAU_SPEED_CONSTANT: number = 0.25;
+const TAU_SPEED_CURVE: number = 0.4;
+
+function speedTau(mode: number): number {
+  if (mode === MODE_CONSTANT) {
+    return TAU_SPEED_CONSTANT;
+  }
+  if (mode === MODE_CURVE) {
+    return TAU_SPEED_CURVE;
+  }
+  return TAU_SPEED_DYNAMIC;
+}
 /** 步频模拟的起停包络时间常数（秒） */
 const TAU_CADENCE: number = 1.2;
 /** 低于这个步频认为“没在跑”，动态模式保持上一档，不让音乐掉速 */
@@ -341,6 +364,11 @@ export class RunDemoEngine {
     this.externalSpeedV = -1;
   }
 
+  /** 曲线模式当前段的目标步频（给 native 的 PRESET 控制律用） */
+  currentCurveBpm(): number {
+    return this.curveBpmAt(this.workoutSecV);
+  }
+
   /**
    * 原生音频是否已就绪。
    * ★ false 时**冻结**歌曲位置与运动时钟 —— 否则起播后那几秒"解码+建缓冲"里，
@@ -482,7 +510,7 @@ export class RunDemoEngine {
     if (this.targetBpmV > 0 && this.songBpmV > 0) {
       const raw: number = clampNum(this.targetBpmV / this.songBpmV, MULT_MIN, MULT_MAX);
       if (this.playingV) {
-        const spA: number = 1 - Math.exp(-dtSec / TAU_SPEED);
+        const spA: number = 1 - Math.exp(-dtSec / speedTau(this.modeV));
         this.speedV += spA * (raw - this.speedV);
       }
       this.speedV = clampNum(this.speedV, MULT_MIN, MULT_MAX);

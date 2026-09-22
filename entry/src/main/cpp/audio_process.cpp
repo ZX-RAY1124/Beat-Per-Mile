@@ -117,9 +117,13 @@ void audio_processor::load_audio(char file_path[]){
 }
 
 void audio_processor::release_buffers() {
+    // ★★ 只能还掉解码时的两个声道缓冲，**res 必须留着** ★★
+    //   LiveStretchPlayer::loadAudio() 把 res.data() 记成借用指针 sourceData_，
+    //   之后 seekTo() 要靠它把数据从新位置重新喂进引擎。
+    //   把 res 也 swap 掉会让 seek 变成 use-after-free（读已释放内存）。
+    //   代价：res 那约 62MB 常驻；收益：仍然省下两个声道 ≈ 62MB。
     std::vector<float>().swap(channel_l);
     std::vector<float>().swap(channel_r);
-    std::vector<float>().swap(res);
     file_path_ = nullptr;
 }
 

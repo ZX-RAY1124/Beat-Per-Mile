@@ -14,7 +14,12 @@ import {
   songFilePath
 } from '../ets_libs/RunDemoEngine';
 import { loadAll as curveLoadAll } from '../ets_libs/CurveStore';
-import { NativeAudio, NativePlayStatus } from '../ets_libs/NativeAudio';
+import {
+  HARD_CUT_FADE_MS,
+  HARD_CUT_LEAD_MS,
+  NativeAudio,
+  NativePlayStatus
+} from '../ets_libs/NativeAudio';
 import { stepPipelineStart, stepPipelineStatus, stepPipelineStop } from 'libentry.so';
 import { SOURCE_SIM, STEP_SCENARIOS, getStepScenario, getStepSource } from '../ets_libs/StepSource';
 
@@ -36,6 +41,16 @@ import { SOURCE_SIM, STEP_SCENARIOS, getStepScenario, getStepSource } from '../e
  *       （phase = frac((pos - firstBeat) / (60/BPM))，每拍亮起后线性衰减）。
  *       这样变速时相位依然锁在拍上 —— 这才是"音乐节拍实时跟踪"。
  */
+
+/**
+ * 提前多少秒开始预解码下一首。
+ *
+ * 这是个**内存换安全**的旋钮：解码完的整首歌都躺在 native 的内存里
+ * （162 秒 / 48k / 立体声 ≈ 60MB+），所以预解码开得越早，
+ * "两首歌同时在内存里"的窗口就越长。30 秒足够覆盖几秒的解码，
+ * 又不会让内存峰值翻倍太久。
+ */
+const PREPARE_AHEAD_SEC: number = 30.0;
 
 /** 演示音源（rawfile）；真实音频开关打开时用 */
 const NATIVE_RAW: string = 'LostMemory.m4a';
@@ -101,6 +116,12 @@ interface StepPipelineStatus {
   followState: number;
   lastStepSec: number;
   songSec: number;
+  /** 0 = FOLLOW（动态）  1 = PRESET（恒速/曲线） */
+  mode: number;
+  /** PRESET：最近一次实测相位偏置（offset 单位，圆量，0 = 正中拍点） */
+  phaseOffset: number;
+  /** PRESET：当前 δ（叠在基准倍速上的临时偏差，会收回 0） */
+  delta: number;
   hasPlayer: boolean;
 }
 
@@ -176,6 +197,25 @@ struct Player {
   @State songKey: string = '';
   /** 曲库里所有歌的键（调试区用来切歌） */
   @State songKeys: string[] = [];
+  /** 曲库全量条目（缓存，接歌时按 key 找下一首） */
+  private songDb: SongEntry[] = [];
+
+  // ---- S2/S3：预解码 + 接歌硬切 ----
+  /** 已经预解码好、只等 start 信号的下一首（null = 没备） */
+  private pendingNext: NativeAudio | null = null;
+  private pendingKey: string = '';
+  /** 调试区显示接歌状态 */
+  @State cutInfo: string = '';
+  /** 自动接歌开关（默认开：播到快完自动切下一首） */
+  @State autoNext: boolean = true;
+  /** 预解码失败过的键：避免到点后每帧重试、把解码线程打爆 */
+  private prepareFailedKey: string = '';
+  /** 刚切完的静默期（毫秒时间戳），期间不再触发自动切歌，避免连环切 */
+  private cutGuardUntil: number = 0;
+  /** native 回报的真实音频总长 / 起播延迟 / 剩余（调试区显示） */
+  @State nativeDurSec: number = 0;
+  @State startLatencyMs: number = -1;
+  @State nativeRemain: number = -1;
 
   // ---- 步数检测源 / native 步频管线 ----
   @State stepSource: number = SOURCE_SIM;
@@ -185,6 +225,7 @@ struct Player {
   @State pipelineMultiplier: number = 1;
   @State pipelineState: number = 0;
   @State pipelineSteps: number = 0;
+
   /** 每 6 个 tick 轮询一次 native 状态（约 5Hz） */
   private pollCounter: number = 0;
 
@@ -226,6 +267,7 @@ struct Player {
   aboutToDisappear(): void {
     this.stopTick();
     this.stopPipeline();
+    this.cancelPending();
     this.native.stop();
   }
 
@@ -349,6 +391,9 @@ struct Player {
                   this.posSec = value;
                 } else {
                   this.engine.seek(value);
+                  if (this.nativeOn) {
+                    this.native.seek(value);   // 真正跳原生播放位置
+                  }
                   this.seeking = false;
                   this.pullStatus();
                 }
@@ -571,6 +616,11 @@ struct Player {
         .fontSize(11)
         .fontColor(TEXT_TERTIARY)
         .width('100%')
+
+      Text('开环：音乐是节拍基准，不读脚步。想跟脚步请切「动态检测」。')
+        .fontSize(11)
+        .fontColor(TEXT_SECONDARY)
+        .width('100%')
     }
     .width('100%')
   }
@@ -611,6 +661,11 @@ struct Player {
       Text('曲线来自「曲线列表」的第一条；没有曲线时用内置演示段（热身/目标/放松）。')
         .fontSize(11)
         .fontColor(TEXT_TERTIARY)
+        .width('100%')
+
+      Text('开环：音乐是节拍基准，不读脚步。想跟脚步请切「动态检测」。')
+        .fontSize(11)
+        .fontColor(TEXT_SECONDARY)
         .width('100%')
     }
     .width('100%')
@@ -670,6 +725,9 @@ struct Player {
         this.DebugRow('native 管线', this.pipelineOn
           ? ('运行中 · ' + this.pipelineStateText())
           : '未启动')
+        this.DebugRow('控制律', this.mode === MODE_DYNAMIC
+          ? 'FOLLOW（闭环，倍速跟步频）'
+          : 'PRESET（开环 + PhaseTrim 相位对齐）')
         this.DebugRow('原生播放状态', this.nativeOn
           ? (this.nativeState + (this.nativeError.length > 0 ? (' · ' + this.nativeError) : ''))
           : '未启用')
@@ -704,6 +762,55 @@ struct Player {
             })
           }, (k: string) => k)
         }
+        // ---- S2/S3：预解码 + 自动接歌 ----
+        Row({ space: 8 }) {
+          Text('自动接歌（放到快完切下一首）')
+            .fontSize(13)
+            .fontColor(TEXT_PRIMARY)
+            .layoutWeight(1)
+          Toggle({ type: ToggleType.Switch, isOn: this.autoNext })
+            .selectedColor(ACCENT)
+            .onChange((isOn: boolean) => {
+              this.autoNext = isOn;
+            })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        this.DebugRow('接歌', this.cutInfo.length > 0 ? this.cutInfo : '（未预解码）')
+        this.DebugRow('下一首', this.pendingNext !== null
+          ? ('已备好：' + this.pendingKey)
+          : (this.prepareFailedKey.length > 0 ? ('预解码失败：' + this.prepareFailedKey) : '未预解码'))
+        this.DebugRow('剩余 / 提前量', (this.nativeRemain >= 0 ? this.nativeRemain.toFixed(2) + 's' : '—')
+          + ' / ' + (this.cutLeadSec() * 1000).toFixed(0) + 'ms')
+        this.DebugRow('起播延迟', this.startLatencyMs > 0
+          ? (this.startLatencyMs.toString() + ' ms（实测）')
+          : ('未测到，先用常量 ' + HARD_CUT_LEAD_MS.toString() + ' ms'))
+        this.DebugRow('native 音频总长', this.nativeDurSec > 0
+          ? (formatTime(this.nativeDurSec) + ' · 曲库标的 ' + formatTime(this.durSec))
+          : formatTime(this.durSec))
+        Row({ space: 8 }) {
+          Text('预解码下一首')
+            .fontSize(12)
+            .fontColor(ACCENT)
+            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+            .backgroundColor('#FFFFFF')
+            .borderRadius(8)
+            .onClick(() => {
+              this.prepareNextSong();
+            })
+          Text('硬切到它')
+            .fontSize(12)
+            .fontColor('#FFFFFF')
+            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+            .backgroundColor(ACCENT)
+            .borderRadius(8)
+            .onClick(() => {
+              this.doHardCut(false);
+            })
+          Blank()
+        }
+        .width('100%')
+
         this.DebugRow('光效', this.glowEnabled ? '开（拍相位驱动）' : '关')
         this.DebugRow('歌曲时长', formatTime(this.durSec) + ' · 共 ' + this.totalBeats() + ' 拍')
 
@@ -765,6 +872,7 @@ struct Player {
       keys.push(db[i].key);
     }
     this.songKeys = keys;
+    this.songDb = db;
 
     if (db.length === 0) {
       this.songKey = '';
@@ -797,12 +905,221 @@ struct Player {
       return;
     }
     this.stopPipeline();
+    this.cancelPending();     // 预解码了一半就直接换歌 ⇒ 把那个会话放掉，否则它一直挂着
     this.native.stop();
     this.engine.setPlaying(false);
     setCurrentSongKey(key);
     this.loadSongList(c);
     this.seeking = false;
     this.pullStatus();
+  }
+
+  // ==================== S2/S3：预解码 + 接歌硬切 ====================
+
+  /** 曲库里的下一首（到头回绕）；只有一首 / 库空返回 null */
+  private nextSongEntry(): SongEntry | null {
+    if (this.songDb.length < 2) {
+      return null;
+    }
+    let idx: number = 0;
+    for (let i = 0; i < this.songDb.length; i++) {
+      if (this.songDb[i].key === this.songKey) {
+        idx = i;
+        break;
+      }
+    }
+    return this.songDb[(idx + 1) % this.songDb.length];
+  }
+
+  /**
+   * 只把下一首**预解码**（几秒级），当前这首照常播。
+   * ★ 这就是"不断音"的全部前提：解码那几秒绝不能落在切换的那一瞬间。
+   */
+  private prepareNextSong(): void {
+    const c = this.ctx;
+    if (c === null) {
+      return;
+    }
+    if (this.pendingNext !== null) {
+      return;                      // 已经备好了（也保证同时只有一个预解码）
+    }
+    const nx: SongEntry | null = this.nextSongEntry();
+    if (nx === null) {
+      this.cutInfo = '曲库里没有下一首';
+      return;
+    }
+    if (nx.key === this.prepareFailedKey) {
+      return;                      // 这首歌刚失败过，别再重试
+    }
+    const t: NativeAudio = new NativeAudio();
+    if (!t.prepareOnly(songFilePath(c, nx.song))) {
+      this.prepareFailedKey = nx.key;
+      this.cutInfo = '预解码发起失败：' + nx.key;
+      return;
+    }
+    this.prepareFailedKey = '';
+    this.pendingNext = t;
+    this.pendingKey = nx.key;
+    this.cutInfo = '正在预解码 ' + nx.key + '…';
+  }
+
+  /**
+   * 预解码的会话是不是**真的**可以接歌了。
+   * ★ pendingNext !== null 只说明"会话建起来了"（music_prepare 会立刻返回），
+   *   解码还在后台跑；这时候去 start 就是断音。必须看它的状态到 prepared/ready。
+   *   解码失败时会话会被清掉 ⇒ 状态变 gone，这里同样是 false。
+   */
+  private pendingReady(): boolean {
+    if (this.pendingNext === null) {
+      return false;
+    }
+    const ps: NativePlayStatus | null = this.pendingNext.status();
+    return ps !== null && (ps.state === 'prepared' || ps.state === 'ready');
+  }
+
+  /** 放掉已经预解码但还没切的会话（不给起播信号，让它自己退出） */
+  private cancelPending(): void {
+    if (this.pendingNext !== null) {
+      this.pendingNext.stop();
+      this.pendingNext = null;
+      this.pendingKey = '';
+      this.cutInfo = '已撤销预解码';
+    }
+  }
+
+  /**
+   * 硬切的提前量（秒）：即"提前多久按 start(B)"。
+   *
+   * ★ 优先用 native **实测**的起播延迟 —— B 从收到信号到真出声要跨一次 IPC，
+   *   这段时间跟设备/负载有关，写死常数一定会偏。测到了就照着它提前。
+   */
+  private cutLeadSec(): number {
+    if (this.startLatencyMs > 0) {
+      return this.startLatencyMs / 1000.0;
+    }
+    return HARD_CUT_LEAD_MS / 1000.0;
+  }
+
+  /**
+   * 到点自动接下一首。判据全部来自 native 的真实量：
+   *   · 还剩多少（歌曲时间轴）= durSec(解码帧数÷采样率) − posSec(输入位置÷采样率)
+   *   · 还剩多少**真实秒**  = 上面那个 ÷ 倍速（posSec 是按倍速走的）
+   *   · 提前量              = startLatencyMs（上次实测的"发信号→真出声"）
+   *
+   * 所以两件事都在这里发生：
+   *   还剩 ≤ PREPARE_AHEAD_SEC  → 预解码下一首（解码那几秒现在做掉）
+   *   还剩 ≤ 提前量             → 起播 B，让 B 的第一声正好落在 A 的最后一声上
+   */
+  private autoAdvance(st: NativePlayStatus): void {
+    if (!this.autoNext || !this.nativeOn || !this.playing) {
+      return;
+    }
+    if (Date.now() < this.cutGuardUntil) {
+      return;                      // 刚切完，等 B 的状态上来，别连环切
+    }
+    if (st.state === 'ready' && st.durSec > 0) {
+      const remainSong: number = st.durSec - st.posSec;
+      if (remainSong <= PREPARE_AHEAD_SEC) {
+        this.prepareNextSong();
+      }
+      const sp: number = this.speed > 0.01 ? this.speed : 1.0;
+      const remainReal: number = remainSong / sp;
+      // ★ 必须 pendingReady 才切：还没解码完就 start，等于把断音换个地方发生
+      if (remainReal <= this.cutLeadSec() && this.pendingReady()) {
+        this.doHardCut(true);
+      }
+      return;
+    }
+    if (st.state === 'gone' || st.state === 'idle') {
+      // 已经放完了才轮到我们：预解码没赶上（大文件 / 刚拖过进度条）。
+      // 这时候仍然要往下走 —— 现场加载会静音几秒，但总比停在这儿强。
+      this.doHardCut(true);
+    }
+  }
+
+  /**
+   * 硬切到已预解码的下一首。两种时序：
+   *
+   * 自动（auto=true）——按**实测起播延迟**提前按 start，让 B 的第一声正好落在
+   *   A 的最后一声上：
+   *       t=0            start(B)
+   *       t=lat−FADE     A 音量斜坡开始（FADE 后归零）
+   *       t=lat          B 出声 ≈ A 自然播完
+   *   重叠期被淡出盖住，所以既不会"断"也不会"双声"。
+   *
+   * 手动（auto=false，调试按钮）——不预判 A 何时结束，索性让 A 多响 LEAD 一段
+   *   盖住 B 的启动延迟，再淡出停掉：
+   *       t=0            start(B)
+   *       t=LEAD         A 音量斜坡开始（FADE 后归零）
+   *       t=LEAD+FADE+40 A stop()
+   *
+   * 恒速/曲线是**完全开环**：这里只保证"不断音"，不做 A/B 拍相位衔接
+   * （要让程序去迁就你的脚步，那是动态检测模式的事）。
+   */
+  private doHardCut(auto: boolean): void {
+    const c = this.ctx;
+    if (c === null) {
+      return;
+    }
+    // ★ 预解码的会话必须**真的**就绪才能拿来接（见 pendingReady）。
+    //   还在解码 / 已经失败的一律丢掉，走下面的兜底。
+    if (this.pendingNext !== null && !this.pendingReady()) {
+      this.cancelPending();
+    }
+
+    // ★ 兜底：没预解码好也得往下走。现场加载会静音几秒（解码+建引擎），
+    //   但"停在这儿不出声"比"断一下"更糟 —— 跑步时音乐停了是致命的。
+    if (this.pendingNext === null) {
+      const nx: SongEntry | null = this.nextSongEntry();
+      if (nx === null) {
+        this.cutInfo = '没有下一首（曲库里只有一首）';
+        return;
+      }
+      this.prepareFailedKey = '';       // 允许下次重新尝试预解码
+      this.cutInfo = '预解码没赶上，现场加载：' + nx.key;
+      this.switchSong(nx.key);          // 换歌 + 停旧的 + 刷新页面参数
+      this.engine.setPlaying(true);
+      this.startNative();               // 现场加载（会显示"加载中…"）
+      this.cutGuardUntil = Date.now() + 3000;
+      return;
+    }
+
+    const t: NativeAudio = this.pendingNext;
+    const old: NativeAudio = this.native;
+    const nk: string = this.pendingKey;
+    this.pendingNext = null;
+    this.pendingKey = '';
+
+    t.startPrepared();                  // B 瞬时起播（native 只做 Start + play()）
+    this.native = t;                    // 页面从现在起操作 B
+
+    if (auto) {
+      // 自动：按实测起播延迟提前，让 A 的音量刚好在 B 出声时归零
+      const latMs: number = this.cutLeadSec() * 1000.0;
+      const fadeAt: number = latMs - HARD_CUT_FADE_MS;
+      setTimeout(() => {
+        old.fadeOut(HARD_CUT_FADE_MS);
+      }, fadeAt > 0 ? fadeAt : 0);
+      setTimeout(() => {
+        old.stop();
+      }, latMs + 120);
+    } else {
+      // 手动：不预判 A 何时结束，让 A 多响 LEAD 一段盖住 B 的启动延迟
+      setTimeout(() => {
+        old.fadeOut(HARD_CUT_FADE_MS);
+        setTimeout(() => {
+          old.stop();
+        }, HARD_CUT_FADE_MS + 40);
+      }, HARD_CUT_LEAD_MS);
+    }
+
+    // 页面侧跟着换歌：BPM / 首拍 / 时长 / 位置全部按 B 重置
+    setCurrentSongKey(nk);
+    this.loadSongList(c);
+    this.engine.setPlaying(true);
+    this.nativeRemain = -1;
+    this.cutGuardUntil = Date.now() + 1000;
+    this.cutInfo = (auto ? '自动接歌 → ' : '已硬切 → ') + nk;
   }
 
   /** 从设置页（AppStorage）同步一次 */
@@ -817,11 +1134,20 @@ struct Player {
    * 本页只负责起停、轮询显示，以及让进度/光效按真实倍速走。
    */
   private startPipeline(): void {
-    if (this.pipelineOn || this.stepSource !== SOURCE_SIM || this.mode !== MODE_DYNAMIC) {
+    if (this.pipelineOn) {
+      return;
+    }
+    if (this.stepSource !== SOURCE_SIM) {
+      return;                      // 真实传感器尚未接线
+    }
+    if (this.mode !== MODE_DYNAMIC) {
+      // ★ 产品决策：恒速/曲线是**完全开环** —— 音乐按规定倍速播，是节拍基准，
+      //   不读步频、不做相位对齐，用户自己跟音乐跑。所以只有动态模式才需要管线。
+      //   （native 侧保留 PRESET 控制律备用，但当前不从这里启用。）
       return;
     }
     try {
-      stepPipelineStart(this.stepScenario, this.songBpm, this.firstBeat);
+      stepPipelineStart(this.stepScenario, this.songBpm, this.firstBeat, 0, 0.0);
       this.pipelineOn = true;
       this.pipelineCadence = 0;
       this.pipelineMultiplier = 1;
@@ -856,6 +1182,7 @@ struct Player {
       this.pipelineMultiplier = st.multiplier;
       this.pipelineState = st.followState;
       this.pipelineSteps = st.steps;
+
       // 让进度条与拍点光效按"真实倍速"前进
       this.engine.setExternalSpeed(st.multiplier);
     } catch (e) {
@@ -865,6 +1192,10 @@ struct Player {
 
   /** native followState(0/1/2) → 文案（复用动态面板的徽标配色） */
   private pipelineStateText(): string {
+    if (this.mode !== MODE_DYNAMIC) {
+      // PRESET：1 = 正在拉相位，2 = 已对齐（δ 已收回 0）
+      return this.pipelineState === 2 ? '已对齐' : '正在对齐';
+    }
     if (this.pipelineState === 2) {
       return 'HOLD 锁定';
     }
@@ -873,6 +1204,8 @@ struct Player {
     }
     return 'ADJUST 调速';
   }
+
+  /** 预设模式不再做相位对齐（见 startPipeline 的说明） */
 
   private scenarioName(): string {
     if (this.stepScenario >= 0 && this.stepScenario < STEP_SCENARIOS.length) {
@@ -905,13 +1238,11 @@ struct Player {
     // 注意：不要包 animateTo —— pullStatus() 每 33ms 会把 this.mode 同步回来，
     // 动画会被下一帧直接覆盖掉（表现成"没有动画"），不如直接切。
     this.engine.setMode(index);
-    // 只有动态模式才由 native 管线驱动倍速；切走就停掉
-    if (index === MODE_DYNAMIC) {
-      if (this.playing) {
-        this.startPipeline();
-      }
-    } else {
-      this.stopPipeline();
+    this.mode = index;      // 立刻生效：下面 startPipeline() 要读它
+    // ★ 控制律变了（FOLLOW ⇄ PRESET），必须重起管线 —— 两个相位所有者不能同时活着
+    this.stopPipeline();
+    if (this.playing) {
+      this.startPipeline();
     }
     this.pullStatus();
   }
@@ -966,11 +1297,22 @@ struct Player {
     this.nativeState = st.state;
     this.nativeError = st.error;
     this.nativeText = this.nativeStateText(st);
+    this.nativeDurSec = st.durSec;
+    this.startLatencyMs = st.startLatencyMs;
+    // ★ 会话在 native 侧已经没了 ⇒ 立刻作废 id。这样：
+    //   ① 单曲循环时再按播放是重新解码起播，而不是对死会话 resume（点不动）
+    //   ② 下面 doHardCut 里的 old.fadeOut()/old.stop() 变成无害的空操作
+    if (st.state === 'gone' || st.state === 'idle') {
+      this.native.markEnded();
+    }
     // 只有真就绪才让页面位置前进（加载期间冻结，避免空走几秒）
     this.engine.setAudioReady(st.state === 'ready');
     if (st.state === 'ready') {
       this.engine.syncPosition(st.posSec);
+      this.nativeRemain = st.durSec > 0 ? (st.durSec - st.posSec) : -1;
     }
+    // ★ 到点自动接下一首（判据全部是 native 的真实量）
+    this.autoAdvance(st);
   }
 
   private nativeStateText(st: NativePlayStatus): string {
@@ -979,6 +1321,9 @@ struct Player {
     }
     if (st.state === 'failed') {
       return '解码失败';
+    }
+    if (st.state === 'prepared') {
+      return '已就绪待起播';
     }
     if (st.state === 'ready') {
       return '播放中';
@@ -1100,7 +1445,18 @@ struct Player {
 
       // 其余状态 + 管线/原生轮询 ~5Hz（6 × 33ms ≈ 200ms）
       this.pollCounter++;
-      if (this.pollCounter >= 6) {
+      // ★ 临近歌曲结尾时切成**每帧轮询**（30Hz ≈ 33ms）：
+      //   接歌的提前量只有一两百毫秒，5Hz 的 200ms 粒度根本踩不住那个点
+      //   （要么一直没到阈值、要么下一帧已经放完了 ⇒ 必然断一下）。
+      //   只在最后这几秒提频，对整页重绘的开销可以忽略。
+      const remainPage: number = this.durSec - this.posSec;
+      const nearEnd: boolean = this.nativeOn
+        && this.nativeState === 'ready'
+        && this.autoNext
+        && this.playing
+        && remainPage >= -0.5
+        && remainPage < 2.5;
+      if (this.pollCounter >= 6 || nearEnd) {
         this.pollCounter = 0;
         if (this.nativeOn) {
           this.pollNative();             // 加载中 / 解码失败 / 真实位置回填

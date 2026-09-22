@@ -2,9 +2,19 @@ export const add: (a: number, b: number) => number;
 export const squire:(a: number, b: number ) => number;
 export const test_audio:(name:string) => string;
 export const music_play: (url:string, callback : (progress: number) => void) => number;
+// ★ S2：预解码 / 起播分离。music_prepare 只解码建引擎、不出声，返回会话 id；
+//   music_start(id) 对已就绪的会话发信号，瞬时起播（接歌硬切用这个）。
+export const music_prepare: (url: string, callback: (progress: number) => void) => number;
+export const music_start: (id: number) => void;
 export const music_resume:(id: number) => void;
 export const music_pause:(id:number) => void;
 export const music_cancel:(id: number) => void;
+/** 跳到歌曲 sec 秒处继续播（会丢掉 seek 之前残留的输出，不会先播一小段旧位置） */
+export const music_seek:(id: number, sec: number) => void;
+/** 设置倍速。倍速是全局的：同时出声的流必须共用同一个拍周期 */
+export const music_set_speed:(id: number, speed: number) => void;
+/** 设置本会话输出音量；rampMs > 0 时用音量斜坡（交叉淡化的基础，系统负责混音） */
+export const music_set_volume:(id: number, volume: number, rampMs: number) => void;
 export const changeSpeed:(speed: number) => void;
 /** ⚠️ 旧接口：同步执行，会阻塞主线程（长音频触发 THREAD_BLOCK_6S），且不回传结果。仅保留兼容，勿在新代码使用 */
 export const musicAnalyse:(path: string) => void;
@@ -41,11 +51,23 @@ export const getAnalyseStatus: () => string;
  * @param scenario 模拟场景序号（0 跑步160 / 1 跑步200 / 2 跑步120→200 / 3 跑20s停8s / 4 步行108 / 5 站立不动）
  * @param songBpm 当前歌曲 BPM（倍速 = 步频 / 歌曲BPM）
  * @param firstBeatSec 歌曲第一拍时间（秒）
+ * @param mode 控制律：0 = FOLLOW（动态模式，倍速跟实测步频）
+ *                        1 = PRESET（恒速/曲线，倍速 = 规定步频/歌曲BPM，再用 PhaseTrim 对齐相位）
+ * @param targetBpm PRESET 模式的规定目标步频（FOLLOW 传 0）
  */
-export const stepPipelineStart: (scenario: number, songBpm: number, firstBeatSec: number) => void;
+export const stepPipelineStart: (scenario: number, songBpm: number, firstBeatSec: number,
+  mode: number, targetBpm: number) => void;
 export const stepPipelineStop: () => void;
 export const stepPipelineSetScenario: (scenario: number) => void;
-/** 返回 JSON 字符串：{running,cadenceSpm,multiplier,targetBpm,steps,followState,lastStepSec,songSec,hasPlayer} */
+/** PRESET 模式：曲线推进 / 恒速滑条改动时更新规定目标步频 */
+export const stepPipelineSetTargetBpm: (bpm: number) => void;
+/**
+ * 返回 JSON 字符串：
+ *   {running,cadenceSpm,multiplier,targetBpm,steps,followState,lastStepSec,songSec,
+ *    mode,phaseOffset,delta,hasPlayer}
+ * FOLLOW 的 followState: 0=ADJUST 1=CHASE 2=HOLD
+ * PRESET 的 followState: 1=正在拉相位 2=已对齐
+ */
 export const stepPipelineStatus: () => string;
 /**
  * 查询原生播放状态。返回 JSON 字符串：

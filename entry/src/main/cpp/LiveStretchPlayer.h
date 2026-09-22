@@ -127,6 +127,7 @@ public:
      */
     void loadAudio(const float* data, long long totalFrames) {
         stop(); // 先停止播放
+        finished_.store(false, std::memory_order_relaxed);   // 有新数据了
 
         // 保留源数据指针，供 seekTo() 重新喂入使用（借用指针，调用方须保持数据存活）
         sourceData_ = data;
@@ -175,6 +176,11 @@ public:
         bool wasPaused  = paused_.load(std::memory_order_relaxed);
         stop(); // 停止并等待后台线程退出
 
+        // 此刻生产线程已退出。通知上层清掉下游环形缓冲里 seek 之前的残留音频。
+        if (seekResetCb_) {
+            seekResetCb_();
+        }
+
         engine_.reset();
         long long remaining = sourceFrames_ - frameOffset;
         const float* data = sourceData_ + frameOffset;
@@ -193,6 +199,7 @@ public:
         engine_.finish(); // 标记输入结束
         seekOffset_ = frameOffset;
 
+        finished_.store(false, std::memory_order_relaxed);   // 从新位置重新喂入了数据
         if (wasPlaying) {
             // 直接以「暂停态」启动线程：避免 play() 后紧接 pause() 期间
             // 音频线程抢先产出一块真实音频（播放中跳转不受影响）
@@ -250,6 +257,17 @@ public:
     bool isRunning() const { return running_.load(std::memory_order_relaxed); }
 
     /**
+     * @brief 数据是否**真的放完了**（引擎耗尽、process() 返回 0）。
+     *
+     * ★ 这是它和 isRunning() 的关键区别：
+     *   stop() / seekTo() 内部也会把 running_ 置 false，但那是"被要求停下"，
+     *   不是"放完了"。上层用 isRunning() 判"播放结束"会在 seek 的瞬间误判
+     *   （seekTo 第一步就是 stop()），进而把会话/渲染器释放掉 —— 正是
+     *   "拖进度条就卡死/没声"的成因。
+     */
+    bool isFinished() const { return finished_.load(std::memory_order_relaxed); }
+
+    /**
      * @brief 注册"音频线程刚启动时"执行的回调（可选）。
      *
      * ★ 用途是**平台相关的线程优先级提升**。本类刻意保持平台无关（不 include 任何
@@ -259,6 +277,17 @@ public:
      *   ⇒ underrun（掉音）。
      */
     void setThreadStartCallback(std::function<void()> cb) { threadStartCb_ = cb; }
+
+    /**
+     * @brief 注册"seek 时、生产线程已停但还没重新喂数据"这一刻要执行的回调。
+     *
+     * ★ 用途：丢掉下游环形缓冲里 **seek 之前** 的残留音频。
+     *   否则 seek 完会先播出旧位置的一小段（听感就是"跳过去又弹回来"）。
+     *   调用时机保证：本类刚执行完 stop()（生产线程已 join 退出）。
+     *   调用方还需自行保证**消费端此刻也停着**（例如先把声卡 Pause），
+     *   否则不满足下游环形缓冲 reset() 的前置条件。
+     */
+    void setSeekResetCallback(std::function<void()> cb) { seekResetCb_ = cb; }
 
     // ==================== 数据回调注册 ====================
 
@@ -342,6 +371,7 @@ private:
 
             // 如果返回 0，表示所有数据已耗尽，自动停止线程
             if (produced == 0) {
+                finished_.store(true, std::memory_order_relaxed);   // 真的放完了
                 running_ = false;
                 break;
             }
@@ -371,10 +401,12 @@ private:
     std::atomic<bool> running_;             ///< 线程是否运行
     std::atomic<bool> paused_;              ///< 是否暂停
     std::atomic<bool> silenceOnPause_{true}; ///< 暂停时是否仍输出静音块（默认 true 保持兼容）
+    std::atomic<bool> finished_{false};      ///< 数据是否真的放完了（只有 process()==0 才置位）
     std::thread workThread_;                ///< 后台工作线程
 
     std::function<void(const float* data, int frames, int channels)> audioCallback_; ///< 数据回调
     std::function<void()> threadStartCb_;   ///< 音频线程启动钩子（平台优先级提升用）
+    std::function<void()> seekResetCb_;     ///< seek 时清下游缓冲的钩子
 
     const float* sourceData_ = nullptr;    ///< 源数据借用指针（seek 时重新喂入用）
     long long sourceFrames_ = 0;           ///< 源数据总帧数（64 位）
