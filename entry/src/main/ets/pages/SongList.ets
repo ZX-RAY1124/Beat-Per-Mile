@@ -5,7 +5,7 @@ import { SongJSON, SongListJSON, selection, saveAt, totalSongList, SongJSON_ROW,
 import { common } from '@kit.AbilityKit';
 import call from '@ohos.telephony.call';
 import { loadAll } from '../ets_libs/CurveStore';
-import {analyzeMusicAsync, getAnalyseStatus, SongMeta} from 'libentry.so';
+import {analyzeMusicAsync, getAnalyseStatus, analyzeSongSegments, SongMeta} from 'libentry.so';
 
 /**
  * 歌曲列表（音乐库）
@@ -284,8 +284,12 @@ export struct SongList {
                     }
                     console.info(`导入 ${paths.length} 首，开始逐首分析…`);
                     // 逐首串行分析：native 的进度状态是单例，并行会互相覆盖
-                    analyzeSequentially(paths, (meta: SongMeta) => {
+                    analyzeSequentially(paths, (meta: SongMeta, path: string) => {
+                      // ① songs.json：歌曲列表展示要的元数据（BPM 是 Essentia 的全局值）
                       this.add_music(meta.name, meta.BPM, meta.author, meta.time, selection.OFFLINE);
+                      // ② song_data.json：CppDataAnalyzer 的详细多段 BPM（预览播放器用）
+                      //    必须在 analyzeMusicAsync 成功之后 —— native 要读刚写下的 _beats.csv
+                      this.add_song_data(path);
                     }).then(() => {
                       // 全部落库完成后再重读一次，保证界面看到完整列表
                       this.reload_SongList();
@@ -644,6 +648,47 @@ export struct SongList {
     }
   }
 
+  /**
+   * 详细 BPM 落库：调 native 的 CppDataAnalyzer 链路，把多段 BPM 并入 song_data.json。
+   *
+   * 调用时机：analyzeMusicAsync 成功之后（native 要读刚写下的 <同名>_beats.csv）。
+   * 失败只记日志、不抛出 —— songs.json 已经写好，不能因为"详细数据"失败让整次导入失败。
+   */
+  private add_song_data(audioPath: string): void {
+    const ctx: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+
+    let raw: string = '';
+    try {
+      raw = analyzeSongSegments(audioPath);
+    } catch (e) {
+      console.error(`[song_data] analyzeSongSegments 调用失败: ${err2str(e)}`);
+      return;
+    }
+
+    let parsed: SongSegmentsResult;
+    try {
+      parsed = JSON.parse(raw) as SongSegmentsResult;
+    } catch (e) {
+      console.error(`[song_data] 返回的 JSON 解析失败: ${raw}`);
+      return;
+    }
+    if (!parsed.ok || parsed.segments === undefined || parsed.segments.length === 0) {
+      const why: string = parsed.error !== undefined ? parsed.error : '未知原因';
+      console.error(`[song_data] 段落分析未产出: ${why}`);
+      return;
+    }
+
+    const entry: SongDataEntry = {
+      filename: parsed.filename,
+      filedir: parsed.filedir,
+      segments: parsed.segments
+    };
+    if (mergeSongData(ctx, entry)) {
+      console.info(`[song_data] ✅ ${parsed.filename}: ${parsed.segments.length} 段`);
+    }
+  }
+
 
 
 
@@ -986,7 +1031,7 @@ async function importFromPicker(context: common.Context): Promise<string[]> {
  * @param onResult 每首分析完成（成功才回调 meta）时通知上层，用于落库
  */
 async function analyzeSequentially(paths: string[],
-                                   onResult: (meta: SongMeta) => void): Promise<void> {
+                                   onResult: (meta: SongMeta, path: string) => void): Promise<void> {
   const total: number = paths.length;
   for (let i = 0; i < total; i++) {
     const p: string = paths[i];
@@ -999,8 +1044,8 @@ async function analyzeSequentially(paths: string[],
       analyzeMusicAsync(p, (meta: SongMeta | null, err?: string) => {
         clearInterval(progressTimer);
         if (meta !== null) {
-          console.info(`[import] ✅ ${i + 1}/${total} ${meta.name} · ${meta.author} · ${meta.time} · ${meta.BPM} BPM`);
-          onResult(meta);
+          console.info(`[import] ✅ ${i + 1}/${total} ${meta.name} · ${meta.author} · ${meta.time} ${meta.BPM} BPM`);
+          onResult(meta, p);   // 把沙箱路径一起给上层，song_data.json 要用它找 _beats.csv
         } else {
           console.error(`[import] ❌ ${i + 1}/${total} ${name} 分析失败: ${err ?? '未知原因'}`);
         }
@@ -1010,6 +1055,112 @@ async function analyzeSequentially(paths: string[],
   }
   if (total > 0) {
     console.info(`[import] 全部结束，共处理 ${total} 个文件`);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  song_data.json —— CppDataAnalyzer 的详细 BPM 段落（预览播放器读的那份）
+//
+//  两套 json 暂时并存（临近截止先不合并）：
+//    · Songs.json      —— 歌曲列表展示用（name/author/time/BPM/type），在 add_music 里写
+//    · song_data.json  —— 详细 BPM 段落，Player/RunDemoEngine 跟步频用，在这里写
+//  合并键用 filename：RunDemoEngine 的 SongEntry.key 就是它，Player 也按它找歌。
+// ════════════════════════════════════════════════════════════════════════
+
+/** song_data.json 里的一段速度（与 index.d.ts 的 SongSegmentMeta 对齐） */
+interface SongDataSegment {
+  start: number;
+  end: number;
+  bpm: number;
+  firstbeat: number;
+}
+
+/** song_data.json 数组里的一个元素：一首歌 */
+interface SongDataEntry {
+  filename: string;
+  filedir: string;
+  segments: SongDataSegment[];
+}
+
+/**
+ * native analyzeSongSegments() 返回的 JSON。
+ * 这里刻意用**本文件自己的类型**（而不是从 libentry.so import 一份），
+ * 免得在两个命名不同的接口之间做结构赋值 —— ArkTS 对这类赋值比 TS 严。
+ */
+interface SongSegmentsResult {
+  ok: boolean;
+  filename: string;
+  filedir: string;
+  segments: SongDataSegment[];
+  error?: string;
+}
+
+/** song_data.json 的绝对路径（与 RunDemoEngine.mediaDir 的约定一致） */
+function songDataFilePath(ctx: common.UIAbilityContext): string {
+  return ctx.filesDir + '/Media/song_data.json';
+}
+
+/**
+ * 把一首歌的详细 BPM 段落并入 song_data.json。
+ *
+ * 为什么是"合并"而不是覆盖：曲库里的歌可能来自协作者的离线 Essentia 管线
+ * （他们先把 song_data.json 放进 Media），我们导入时不能把已有条目冲掉。
+ * 同一首（filename 相同）则替换它那一条，避免重复导入堆出多份。
+ *
+ * ⚠️ 落盘必须先截断：writeSync 不截断，新内容比旧内容短时旧文件尾部会残留，
+ *    读出来就是 "……}]}旧尾巴"，JSON.parse 直接抛（Songs.json 踩过同样的坑）。
+ */
+function mergeSongData(ctx: common.UIAbilityContext, entry: SongDataEntry): boolean {
+  const path: string = songDataFilePath(ctx);
+  let list: SongDataEntry[] = [];
+  if (fs.accessSync(path)) {
+    try {
+      const text: string = fs.readTextSync(path);
+      if (text.length > 0) {
+        // 约定格式：顶层是数组。静态类型写成数组，但**是不是数组只有运行期知道**，
+        // 所以必须 Array.isArray 判一下（与 RunDemoEngine.loadSongDatabase 同样的写法）。
+        const asList: SongDataEntry[] = JSON.parse(text) as SongDataEntry[];
+        if (Array.isArray(asList)) {
+          list = asList;
+        } else {
+          // 兼容旧的"单曲平铺"格式：{ filename, filedir, segments }
+          const asObj: SongDataEntry = JSON.parse(text) as SongDataEntry;
+          if (asObj !== undefined && asObj !== null) {
+            list = [asObj];
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[song_data] 解析失败，按空库重建: ${err2str(e)}`);
+      list = [];
+    }
+  }
+
+  // 同名（filename）替换；没有同名就追加到末尾
+  const next: SongDataEntry[] = [];
+  let hit: boolean = false;
+  for (let i = 0; i < list.length; i++) {
+    const cur: SongDataEntry = list[i];
+    if (cur !== undefined && cur !== null && cur.filename === entry.filename) {
+      next.push(entry);
+      hit = true;
+    } else {
+      next.push(cur);
+    }
+  }
+  if (!hit) {
+    next.push(entry);
+  }
+
+  try {
+    const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+    fs.truncateSync(path, 0);            // 见函数头注释：必须先截断
+    fs.writeSync(f.fd, JSON.stringify(next));
+    fs.closeSync(f);
+    return true;
+  } catch (e) {
+    console.error(`[song_data] 写入失败: ${err2str(e)}`);
+    return false;
   }
 }
 

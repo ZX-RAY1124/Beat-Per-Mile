@@ -1,4 +1,5 @@
 #include "EssentiaBeats.hpp"
+#include "CppDataAnalyzer.hpp"   // 节拍表 CSV → 多 BPM 段落（header-only）
 #include "ffmpeg_decoder.hpp"
 #include "audio_process.h"
 #include "napi/native_api.h"
@@ -496,6 +497,12 @@ static std::string stripExtOf(const std::string& path) {
     return path.substr(0, dot);
 }
 
+/** 文件所在目录（不含末尾斜杠）；没有斜杠返回空串 */
+static std::string dirNameOf(const std::string& path) {
+    const size_t slash = path.find_last_of("/\\");
+    return (slash == std::string::npos) ? std::string() : path.substr(0, slash);
+}
+
 /** 秒 → "M:SS"；超过 1 小时 → "H:MM:SS"。与 ArkTS 侧 formatDuration 格式一致 */
 static std::string formatDuration(int totalSec) {
     if (totalSec < 0) totalSec = 0;
@@ -774,6 +781,81 @@ static napi_value analyzeMusicAsync(napi_env env, napi_callback_info info) {
 }
 
 
+
+// ════════════════════════════════════════════════════════════════════════
+//  analyzeSongSegments(path) —— CppDataAnalyzer 链路：节拍表 CSV → 多 BPM 段落
+//
+//  为什么需要它：analyzeMusicAsync 回传的 BPM 是 Essentia 的**全局**估计值，
+//  跑步引擎需要的是"这一刻多少 BPM、接下来渐快还是渐慢"，那要 CppDataAnalyzer
+//  的段落结果。它读的正是 analyzeMusicAsync 刚写下的 <同名>_beats.csv，
+//  所以这里**不用重新解码/检测**，只是把同一份节拍表再拟合一次（毫秒级）。
+//
+//  ⚠️ 必须在 analyzeMusicAsync 成功之后调用 —— CSV 才会存在。
+//
+//  返回 JSON 字符串（ArkTS 侧 JSON.parse）：
+//    成功 {"ok":true,"filename":"x.wav","filedir":".../Media",
+//          "segments":[{"start":0.5,"end":162.15,"bpm":113.996,"firstbeat":0.5}, ...]}
+//    失败 {"ok":false,"filename":...,"filedir":...,"segments":[],"error":"..."}
+//  segments 刻意只留 song_data.json 约定的四个字段（trend/r2/rmse 不落盘），
+//  与协作者的格式保持一致；Player/RunDemoEngine 也是按 filename 找歌。
+// ════════════════════════════════════════════════════════════════════════
+static napi_value analyzeSongSegments(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    std::string filename;
+    std::string filedir;
+    cda::Result r;
+
+    if (argc < 1 || args[0] == nullptr) {
+        r.error = "缺少音频路径参数";
+    } else {
+        size_t strLen = 0;
+        if (napi_get_value_string_utf8(env, args[0], nullptr, 0, &strLen) != napi_ok) {
+            r.error = "第一个参数不是字符串";
+        } else {
+            std::string path(strLen, '\0');
+            napi_get_value_string_utf8(env, args[0], &path[0], strLen + 1, &strLen);
+            path.resize(strLen);
+            filename = baseNameOf(path);
+            filedir  = dirNameOf(path);
+            // analyzeMusicAsync 写 CSV 的路径规则：去掉扩展名 + "_beats.csv"（同名目录）
+            const std::string csv = stripExtOf(path) + "_beats.csv";
+            r = cda::analyze_file(csv, cda::Options());
+        }
+    }
+
+    std::ostringstream os;
+    os << "{\"ok\":" << (r.ok ? "true" : "false")
+       << ",\"filename\":\"" << jsonEscape(filename) << "\""
+       << ",\"filedir\":\"" << jsonEscape(filedir) << "\""
+       << ",\"segments\":[";
+    if (r.ok) {
+        for (size_t i = 0; i < r.paragraphs.size(); ++i) {
+            if (i > 0) os << ',';
+            const cda::Paragraph& p = r.paragraphs[i];
+            os << "{\"start\":" << p.start
+               << ",\"end\":" << p.end
+               << ",\"bpm\":" << p.bpm_start
+               << ",\"firstbeat\":" << p.start << "}";
+        }
+    }
+    os << "]";
+    if (!r.ok) {
+        os << ",\"error\":\"" << jsonEscape(r.error) << "\"";
+    }
+    os << "}";
+
+    const std::string s = os.str();
+    OH_LOG_INFO(LOG_APP, "[segments] %{public}s -> %{public}u 段 (%{public}s)",
+                filename.c_str(), static_cast<unsigned int>(r.paragraphs.size()),
+                r.ok ? "ok" : r.error.c_str());
+
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, s.c_str(), s.size(), &out);
+    return out;
+}
 
 static napi_value test_audio(napi_env env, napi_callback_info info){       //测试和外部库链接
     size_t argc = 1;
@@ -1733,6 +1815,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"musicAnalyse", nullptr, analyzeMusic, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ★ App 请用这个：异步，不阻塞主线程，且会回传 BPM / 失败原因
         {"analyzeMusicAsync", nullptr, analyzeMusicAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // ★ CppDataAnalyzer 链路：读 <同名>_beats.csv 拟合多 BPM 段落，返回 JSON 字符串
+        {"analyzeSongSegments", nullptr, analyzeSongSegments, nullptr, nullptr, nullptr, napi_default, nullptr},
         // 轮询分析进度：返回 JSON 字符串 {phase,pct,elapsedMs,running,error}
         {"getAnalyseStatus", nullptr, GetAnalyseStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ★ 步频管线（模拟演示源）：起 / 停 / 换场景 / 查状态(JSON)

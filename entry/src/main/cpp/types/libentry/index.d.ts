@@ -38,6 +38,35 @@ export interface SongMeta {
  */
 export const analyzeMusicAsync: (path: string,
   callback: (meta: SongMeta | null, err?: string) => void) => void;
+/** song_data.json 里的一个速度段落（CppDataAnalyzer 的输出） */
+export interface SongSegmentMeta {
+  /** 段落起始时间（秒） */
+  start: number;
+  /** 段落结束时间（秒） */
+  end: number;
+  /** 段落起始 BPM */
+  bpm: number;
+  /** 段落第一拍时间（秒），播放器算拍相位用 */
+  firstbeat: number;
+}
+/** analyzeSongSegments() 返回的 JSON 结构 */
+export interface SongSegmentsMeta {
+  ok: boolean;
+  /** 音频文件名（含扩展名），song_data.json 的合并键 */
+  filename: string;
+  /** 音频所在目录（Media 绝对路径） */
+  filedir: string;
+  segments: SongSegmentMeta[];
+  /** ok=false 时的原因 */
+  error?: string;
+}
+/**
+ * CppDataAnalyzer 链路：读 analyzeMusicAsync 生成的 <同名>_beats.csv，
+ * 用多 BPM 段落拟合（聚类归一化 + 二次回归 + 递归分裂）算出详细 BPM。
+ * 同步、毫秒级；必须在 analyzeMusicAsync 成功之后调用（CSV 才存在）。
+ * 返回 JSON 字符串，结构见 SongSegmentsMeta。
+ */
+export const analyzeSongSegments: (path: string) => string;
 /**
  * 轮询分析进度（用于把"还要等多久 / 卡在哪一步"显示出来）。
  * 返回 JSON 字符串：{"phase":"decode|detect|write|done|failed|idle","pct":0~100 或 -1,
