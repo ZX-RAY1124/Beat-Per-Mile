@@ -26,6 +26,7 @@
  */
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
+import { SongJSON } from './PlayListStore';
 
 /** 播放模式 */
 export const MODE_DYNAMIC: number = 0;   // 动态检测：倍速 = 实测步频 / 歌曲 BPM
@@ -264,6 +265,54 @@ export function loadSongData(ctx: common.UIAbilityContext): SongData | null {
 /** song_data.json 指向的音频，在沙箱里的完整路径 */
 export function songFilePath(ctx: common.UIAbilityContext, song: SongData): string {
   return mediaDir(ctx) + '/' + song.filename;
+}
+
+/** "xxx.wav" → "xxx"（按歌名兜底匹配时用） */
+function stripExtension(name: string): string {
+  const dot: number = name.lastIndexOf('.');
+  return dot > 0 ? name.substring(0, dot) : name;
+}
+
+/**
+ * 把歌单里的歌，按顺序翻译成播放器要的 SongEntry。
+ *
+ * 匹配规则（两级兜底）：
+ *   ① 优先用 filename（稳定 id）精确匹配 song_data.json 的 key；
+ *   ② filename 为空/对不上时，退回按**歌名**匹配"文件名去扩展名"——
+ *      早期 Songs.json / 歌单没有 filename，靠这个也能播。
+ * 找不到的条目跳过并打日志：一首歌缺失不该让整个歌单播不了。
+ * （预览播放器在用；正式播放器以后直接复用这个函数即可。）
+ */
+export function resolvePlaylistEntries(ctx: common.UIAbilityContext,
+                                       items: SongJSON[]): SongEntry[] {
+  const db: SongEntry[] = loadSongDatabase(ctx);
+  const out: SongEntry[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const it: SongJSON = items[i];
+    const f: string = it.filename !== undefined ? it.filename : '';
+
+    let hit: SongEntry | null = null;
+    // ① filename 精确匹配
+    if (f.length > 0) {
+      for (let j = 0; j < db.length; j++) {
+        if (db[j].key === f) { hit = db[j]; break; }
+      }
+    }
+    // ② 歌名兜底：playlist.name == 文件名去扩展名
+    if (hit === null && it.name.length > 0) {
+      for (let j = 0; j < db.length; j++) {
+        if (stripExtension(db[j].key) === it.name) { hit = db[j]; break; }
+      }
+    }
+
+    if (hit !== null) {
+      out.push(hit);
+    } else {
+      console.warn('[playlist] song_data.json 里找不到 "' + it.name
+        + '"（filename="' + f + '"），跳过');
+    }
+  }
+  return out;
 }
 
 /**

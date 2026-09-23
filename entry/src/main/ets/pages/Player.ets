@@ -10,10 +10,12 @@ import {
   SongEntry,
   getCurrentSongKey,
   loadSongDatabase,
+  resolvePlaylistEntries,
   setCurrentSongKey,
   songFilePath
 } from '../ets_libs/RunDemoEngine';
 import { loadAll as curveLoadAll } from '../ets_libs/CurveStore';
+import { ACTIVE_PLAYLIST_KEY, SongListJSON, loadAll as songListLoadAll } from '../ets_libs/PlayListStore';
 import {
   HARD_CUT_FADE_MS,
   HARD_CUT_LEAD_MS,
@@ -197,8 +199,13 @@ struct Player {
   @State songKey: string = '';
   /** 曲库里所有歌的键（调试区用来切歌） */
   @State songKeys: string[] = [];
-  /** 曲库全量条目（缓存，接歌时按 key 找下一首） */
+  /** 曲库全量条目（缓存，接歌时按 key 找下一首）。选了歌单时，这里就是歌单队列 */
   private songDb: SongEntry[] = [];
+
+  // ---- 歌单（调试区选一个 = 按它的顺序播放；index < 0 = 用整库）----
+  private playlists: SongListJSON[] = [];
+  @State playlistNames: string[] = [];
+  @State playlistIndex: number = -1;
 
   // ---- S2/S3：预解码 + 接歌硬切 ----
   /** 已经预解码好、只等 start 信号的下一首（null = 没备） */
@@ -232,6 +239,12 @@ struct Player {
   aboutToAppear(): void {
     const c = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.ctx = c;
+
+    // 歌单列表页选中的歌单（AppStorage 里记着）：播放器直接按它组队列
+    const ap: number | undefined = AppStorage.get<number>(ACTIVE_PLAYLIST_KEY);
+    if (ap !== undefined) {
+      this.playlistIndex = ap;
+    }
 
     // 歌曲：从 song_data.json 的曲库里选一首（默认第一首 / 上次选的那首）
     this.filesDir = c.filesDir;
@@ -735,6 +748,49 @@ struct Player {
         this.DebugRow('filesDir', this.filesDir)
         this.DebugRow('当前歌曲键', this.songKey.length > 0 ? this.songKey : '（曲库为空）')
 
+        // 歌单：点一下 = 按这个歌单播放（拿歌单里的 filename 去 song_data.json 找数据）
+        Text('歌单（点一下按歌单播放）')
+          .fontSize(12)
+          .fontColor(TEXT_SECONDARY)
+          .width('100%')
+        Row({ space: 10 }) {
+          SymbolGlyph(this.playlistIndex < 0
+            ? $r('sys.symbol.checkmark_square_fill')
+            : $r('sys.symbol.square'))
+            .fontSize(16)
+            .fontColor([this.playlistIndex < 0 ? ACCENT : TEXT_TERTIARY])
+          Text('全部歌曲（song_data.json）')
+            .fontSize(12)
+            .fontColor(TEXT_PRIMARY)
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ top: 6, bottom: 6 })
+        .onClick(() => {
+          this.selectPlaylist(-1);
+        })
+
+        ForEach(this.playlistNames, (nm: string, i: number) => {
+          Row({ space: 10 }) {
+            SymbolGlyph(i === this.playlistIndex
+              ? $r('sys.symbol.checkmark_square_fill')
+              : $r('sys.symbol.square'))
+              .fontSize(16)
+              .fontColor([i === this.playlistIndex ? ACCENT : TEXT_TERTIARY])
+            Text(nm)
+              .fontSize(12)
+              .fontColor(TEXT_PRIMARY)
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .width('100%')
+          .padding({ top: 6, bottom: 6 })
+          .onClick(() => {
+            this.selectPlaylist(i);
+          })
+        }, (nm: string, i: number) => nm + '#' + i.toString())
+
         // 曲库列表：点一下切歌（调试用；以后由歌曲列表页接管）
         if (this.songKeys.length > 0) {
           Text('曲库（点一下切换）')
@@ -864,9 +920,37 @@ struct Player {
 
   // ==================== 曲库 / 切歌 ====================
 
-  /** 读曲库，并按 AppStorage 里记的键选中一首（记的键不在库里就用第一首） */
+  /**
+   * 读曲库，并按 AppStorage 里记的键选中一首（记的键不在库里就用第一首）。
+   *
+   * ★ 若选了歌单（playlistIndex >= 0），队列就按**歌单里的 filename 顺序**
+   *   从 song_data.json 取条目；否则用整库。
+   *   歌单存的是文件名这个稳定 id，详细 BPM 数据仍在 song_data.json。
+   */
   private loadSongList(c: common.UIAbilityContext): void {
-    const db: SongEntry[] = loadSongDatabase(c);
+    // 歌单列表（调试区选择用）
+    const pls: SongListJSON[] = songListLoadAll(c);
+    this.playlists = pls;
+    const names: string[] = [];
+    for (let i = 0; i < pls.length; i++) {
+      names.push(pls[i].name);
+    }
+    this.playlistNames = names;
+    if (this.playlistIndex >= pls.length) {
+      this.playlistIndex = pls.length > 0 ? 0 : -1;
+    }
+
+    let db: SongEntry[] = [];
+    if (this.playlistIndex >= 0 && this.playlistIndex < pls.length) {
+      const pl: SongListJSON = pls[this.playlistIndex];
+      // filename 优先，老数据（filename 为空）按歌名兜底 —— 见 resolvePlaylistEntries
+      db = resolvePlaylistEntries(c, pl.songList);
+      console.info('[player] 歌单「' + pl.name + '」: ' + pl.songList.length
+        + ' 首 → song_data.json 命中 ' + db.length + ' 首');
+    } else {
+      db = loadSongDatabase(c);
+    }
+
     const keys: string[] = [];
     for (let i = 0; i < db.length; i++) {
       keys.push(db[i].key);
@@ -909,6 +993,30 @@ struct Player {
     this.native.stop();
     this.engine.setPlaying(false);
     setCurrentSongKey(key);
+    this.loadSongList(c);
+    this.seeking = false;
+    this.pullStatus();
+  }
+
+  /**
+   * 选歌单：停掉播放与管线 → 换队列（按歌单里的 filename 去 song_data.json 找数据）→ 刷新。
+   * 传 -1 表示用整库。
+   */
+  private selectPlaylist(index: number): void {
+    if (index === this.playlistIndex) {
+      return;
+    }
+    const c = this.ctx;
+    if (c === null) {
+      return;
+    }
+    this.stopPipeline();
+    this.cancelPending();
+    this.native.stop();
+    this.engine.setPlaying(false);
+    this.playlistIndex = index;
+    // 记到 AppStorage：与歌单列表页的选择保持同步
+    AppStorage.setOrCreate<number>(ACTIVE_PLAYLIST_KEY, index);
     this.loadSongList(c);
     this.seeking = false;
     this.pullStatus();
@@ -1348,6 +1456,10 @@ struct Player {
       this.nativeText = this.native.statusText();
       return;
     }
+
+    // ★ 区分两种"没歌可放"：songPath 为空 = 歌单没解析到曲目；有路径但不是它 = 文件缺失
+    console.warn('[player] 真实音频不可用，退回内置演示音源。songPath="'
+      + this.songPath + '"（空 = 歌单没解析到曲目）');
 
     const c = this.ctx;
     if (c === null) {

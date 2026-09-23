@@ -1,5 +1,5 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
-import { appendSongList, loadAll, SongListJSON, deleteAt, bumpRevision } from '../ets_libs/PlayListStore';
+import { ACTIVE_PLAYLIST_KEY, appendSongList, loadAll, SongListJSON, deleteAt, bumpRevision } from '../ets_libs/PlayListStore';
 import { SongList } from './SongList';
 import { common } from '@kit.AbilityKit';
 
@@ -199,6 +199,8 @@ export struct Playlist {
     this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
       this.selectedIndex = index;
     });
+    // 告诉播放器"当前选中的是哪个歌单"：它按这个歌单组装播放队列
+    AppStorage.setOrCreate<number>(ACTIVE_PLAYLIST_KEY, index);
   }
 
 

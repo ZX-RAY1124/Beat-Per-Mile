@@ -4,6 +4,9 @@ import { fileIo } from "@kit.CoreFileKit";
 
 export const SONG_LIST_REVISION_KEY: string = 'songListStoreRevision';
 
+/** 歌单列表页选中的歌单下标（AppStorage）——播放器据此组装播放队列 */
+export const ACTIVE_PLAYLIST_KEY: string = 'activePlaylistIndex';
+
 /** 全局版本号，用于返回后刷新 */
 export function bumpRevision(): void{
   const n : number| undefined = AppStorage.get<number>(SONG_LIST_REVISION_KEY);
@@ -23,6 +26,13 @@ export interface SongJSON {
   time: string;
   BPM: number;
   type: selection;
+  /**
+   * 音频文件名（含扩展名）—— 歌单存的**稳定 id**：
+   *   · 去 Media/<filename> 取音频
+   *   · 去 song_data.json 按同名 key 取详细 BPM
+   * 可选是为了兼容早期没写这个字段的 Songs.json / 歌单 json。
+   */
+  filename?: string;
 }
 
 export interface totalSongList{
@@ -44,6 +54,7 @@ export interface SongJSON_ROW {
   time?: string;
   BPM?: number;
   type?: selection;
+  filename?: string;
 }
 
 interface songListJSON_ROW {

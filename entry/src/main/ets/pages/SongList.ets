@@ -33,13 +33,17 @@ class SongData {
   /** 时长，形如 '3:42'；暂时没有这个数据，留空时显示占位符 */
   duration: string;
   type:selection;
+  /** 音频文件名（含扩展名）：歌单的稳定 id（见 PlayListStore.SongJSON.filename） */
+  filename: string;
 
-  constructor(title: string, artist: string, bpm: number, duration: string = '', type_: selection = selection.OFFLINE) {
+  constructor(title: string, artist: string, bpm: number, duration: string = '',
+              type_: selection = selection.OFFLINE, filename_: string = '') {
     this.title = title;
     this.artist = artist;
     this.bpm = bpm;
     this.duration = duration;
     this.type = type_;    //要改,测试用
+    this.filename = filename_;
   }
 }
 
@@ -285,8 +289,11 @@ export struct SongList {
                     console.info(`导入 ${paths.length} 首，开始逐首分析…`);
                     // 逐首串行分析：native 的进度状态是单例，并行会互相覆盖
                     analyzeSequentially(paths, (meta: SongMeta, path: string) => {
+                      const fileName: string = path.substring(path.lastIndexOf('/') + 1);
                       // ① songs.json：歌曲列表展示要的元数据（BPM 是 Essentia 的全局值）
-                      this.add_music(meta.name, meta.BPM, meta.author, meta.time, selection.OFFLINE);
+                      //    同时记下音频文件名 —— 歌单存的就是它（稳定 id）
+                      this.add_music(meta.name, meta.BPM, meta.author, meta.time,
+                        selection.OFFLINE, fileName);
                       // ② song_data.json：CppDataAnalyzer 的详细多段 BPM（预览播放器用）
                       //    必须在 analyzeMusicAsync 成功之后 —— native 要读刚写下的 _beats.csv
                       this.add_song_data(path);
@@ -445,11 +452,18 @@ export struct SongList {
 
   private loadPlayList(songList: SongJSON[]){
     songList.forEach((item) => {
-      SONGS.forEach((song_item) => {
-        if(item.name === song_item.title){
-          this.toggle(SONGS.indexOf(song_item));
-        }
-      })
+      // 优先按 filename 匹配（稳定 id，不随歌名/库顺序变）；
+      // 老数据没有 filename 时才退回按歌名匹配。
+      const wantFile: string = item.filename !== undefined ? item.filename : '';
+      let hit: number = -1;
+      for (let i = 0; i < SONGS.length; i++) {
+        if (wantFile.length > 0) {
+          if (SONGS[i].filename === wantFile) { hit = i; break; }
+        } else if (SONGS[i].title === item.name) { hit = i; break; }
+      }
+      if (hit >= 0) {
+        this.toggle(hit);
+      }
     })
   }
 
@@ -464,6 +478,7 @@ export struct SongList {
         time: SONGS[item].duration ? SONGS[item].duration : '',
         BPM: SONGS[item].bpm ? SONGS[item].bpm : 0,
         type: SONGS[item].type,
+        filename: SONGS[item].filename,   // 稳定 id：播放器拿它去 song_data.json 找数据
       }
       callback.songList.push(SONG_item);
     })
@@ -583,13 +598,15 @@ export struct SongList {
 
 
 
-  private add_music(name_: string, BPM_: number, author_: string, time_:string,type_: selection){
+  private add_music(name_: string, BPM_: number, author_: string, time_:string,
+                    type_: selection, filename_: string){
     let rawData : SongJSON_ROW = {
       name: name_,
       BPM: BPM_,
       author: author_,
       time: time_,
-      type: type_
+      type: type_,
+      filename: filename_
     }
 
     const formalData : SongJSON = {
@@ -597,7 +614,8 @@ export struct SongList {
       BPM: rawData.BPM ? BPM_ : NaN,
       author: rawData.author ? author_ : "Unkown Artist",
       time: rawData.time ? time_ : "00:00",
-      type: type_
+      type: type_,
+      filename: filename_     // 歌单/播放器都靠它找音频与 song_data.json
     }
 
     const ctx: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -640,7 +658,8 @@ export struct SongList {
       }
       songList.songList.forEach((item: SongJSON) => {
         SONGS.push(
-          new SongData(item.name, item.author, item.BPM, item.time, item.type),
+          new SongData(item.name, item.author, item.BPM, item.time, item.type,
+            item.filename !== undefined ? item.filename : ''),
         )
       })
     } catch (e){
