@@ -23,6 +23,9 @@ import { common } from '@kit.AbilityKit';
  */
 export const CURVE_REVISION_KEY: string = 'curveStoreRevision';
 
+/** 曲线列表页选中的曲线下标（AppStorage）——播放器据此取曲线，0 = 恒定BPM */
+export const ACTIVE_CURVE_KEY: string = 'activeCurveIndex';
+
 /** 通知外界：曲线数据变了（saveAt / appendCurve / deleteAt 内部调用） */
 export function bumpRevision(): void {
   const n: number | undefined = AppStorage.get<number>(CURVE_REVISION_KEY);

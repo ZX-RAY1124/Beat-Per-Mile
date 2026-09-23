@@ -48,12 +48,12 @@ const MULT_MAX: number = 2.00;
  *
  * ★ 恒速/曲线的目标是**规定值**（你拖的滑条 / 你画的曲线），没有任何需要滤掉的抖动。
  *   再套 2 秒就只是拖沓 —— 指数逼近要 ~6 秒才到 99%，手感就是"半天才变过去"。
- *   所以这两个模式用很小的时间常数：恒速 0.25s（≈0.75s 到 95%，1 秒内到位），
- *   曲线 0.4s（段切换留一点点过渡，避免速度硬阶跃）。
+ *   ★ 现在曲线是**线性插值**，目标本身连续，再平滑只会"慢半拍" ——
+ *     所以恒速/曲线的时间常数都设为 0（精确跟随规定值）；动态仍保留 2 秒平滑。
  */
 const TAU_SPEED_DYNAMIC: number = 2.0;
-const TAU_SPEED_CONSTANT: number = 0.25;
-const TAU_SPEED_CURVE: number = 0.4;
+const TAU_SPEED_CONSTANT: number = 0.0;
+const TAU_SPEED_CURVE: number = 0.0;
 
 function speedTau(mode: number): number {
   if (mode === MODE_CONSTANT) {
@@ -140,11 +140,59 @@ function normalizeSong(raw: SongDataRaw): SongData | null {
   return song;
 }
 
-/** 曲线一段：运动时间（秒）→ 目标步频 */
+/** 曲线一段：运动时间（秒）→ 目标步频（仅用于 UI 显示"第几段"） */
 export interface CurveStage {
   atSec: number;
   bpm: number;
+  /** 插值方式（目前只认 'linear'） */
+  type: string;
   name: string;
+}
+
+/** 曲线上的一个点（与 CurveStore.CurvePointJson 对齐） */
+export interface TempoPoint {
+  time: number;
+  bpm: number;
+  /** 插值方式：'linear' = 线性；其它暂不支持，退回阶跃 */
+  type: string;
+}
+
+/**
+ * 求 t 秒处的目标 BPM（纯函数，正式播放器可直接复用）。
+ *   · 相邻两点之间按**左端点**的 type：'linear' 线性插值，其它退化为"保持左值"；
+ *   · t 在第一个点之前 → 第一个点的 bpm；
+ *   · t 在最后一个点之后 → 最后一个点的 bpm（曲线走完固定速度）。
+ */
+export function tempoAt(points: TempoPoint[], t: number): number {
+  const n: number = points.length;
+  if (n === 0) {
+    return 0;
+  }
+  if (n === 1) {
+    return points[0].bpm;
+  }
+  if (t <= points[0].time) {
+    return points[0].bpm;
+  }
+  if (t >= points[n - 1].time) {
+    return points[n - 1].bpm;
+  }
+  for (let i = 0; i + 1 < n; i++) {
+    const a: TempoPoint = points[i];
+    const b: TempoPoint = points[i + 1];
+    if (t >= a.time && t <= b.time) {
+      const span: number = b.time - a.time;
+      if (span <= 0) {
+        return b.bpm;
+      }
+      if (a.type !== 'linear') {
+        return a.bpm;                 // 其它插值方式暂不支持，退回阶跃
+      }
+      const k: number = (t - a.time) / span;
+      return a.bpm + (b.bpm - a.bpm) * k;
+    }
+  }
+  return points[n - 1].bpm;
 }
 
 /** 一帧状态快照（页面把它拷进 @State 触发刷新） */
@@ -163,6 +211,8 @@ export interface RunStatus {
   offset: number;        // [-1,1]，0 = 正中拍点，与 tempo::beatOffset 同约定
   stageIndex: number;    // 曲线模式下当前段
   stageName: string;
+  /** 运动时间（秒）—— 曲线的横轴，播放时累加、暂停冻结 */
+  workoutSec: number;
   followState: string;   // 演示用的状态机文案
   stepCount: number;
 }
@@ -339,6 +389,8 @@ export class RunDemoEngine {
 
   // ---- 内部派生量 ----
   private stagesV: CurveStage[] = [];
+  /** 曲线原始点（带 type）—— 求值走这个；stagesV 只用于 UI 的"第几段" */
+  private tempoPointsV: TempoPoint[] = [];
   private cadenceSpmV: number = 0;
   private cadenceRamp: number = 0;
   private speedV: number = 1.0;
@@ -358,9 +410,14 @@ export class RunDemoEngine {
   constructor() {
     // 内置演示曲线：热身 → 目标 → 放松（运动时间轴，秒）
     this.stagesV = [
-      { atSec: 0, bpm: 150, name: '热身' },
-      { atSec: 300, bpm: 170, name: '目标' },
-      { atSec: 1200, bpm: 160, name: '放松' }
+      { atSec: 0, bpm: 150, type: 'linear', name: '热身' },
+      { atSec: 300, bpm: 170, type: 'linear', name: '目标' },
+      { atSec: 1200, bpm: 160, type: 'linear', name: '放松' }
+    ];
+    this.tempoPointsV = [
+      { time: 0, bpm: 150, type: 'linear' },
+      { time: 300, bpm: 170, type: 'linear' },
+      { time: 1200, bpm: 160, type: 'linear' }
     ];
   }
 
@@ -401,15 +458,26 @@ export class RunDemoEngine {
     this.stepCountV = 0;
   }
 
-  /** 用磁盘上的曲线（CurveStore 的 points）覆盖演示曲线；空则忽略 */
-  setStagesFromPoints(times: number[], bpms: number[]): void {
-    if (times.length === 0 || times.length !== bpms.length) {
+  /**
+   * 用磁盘上的曲线（CurveStore 的 points）覆盖内置演示曲线；空则忽略。
+   * 原始点（带 type）留给求值，stagesV 只用于 UI 的"第几段"。
+   */
+  setCurvePoints(points: TempoPoint[]): void {
+    if (points.length === 0) {
       return;
     }
+    const pts: TempoPoint[] = [];
     const st: CurveStage[] = [];
-    for (let i = 0; i < times.length; i++) {
-      st.push({ atSec: times[i], bpm: bpms[i], name: '第' + (i + 1).toString() + '段' });
+    for (let i = 0; i < points.length; i++) {
+      pts.push({ time: points[i].time, bpm: points[i].bpm, type: points[i].type });
+      st.push({
+        atSec: points[i].time,
+        bpm: points[i].bpm,
+        type: points[i].type,
+        name: '第' + (i + 1).toString() + '段'
+      });
     }
+    this.tempoPointsV = pts;
     this.stagesV = st;
   }
 
@@ -484,16 +552,12 @@ export class RunDemoEngine {
 
   // ==================== 曲线取值 ====================
 
+  /** 曲线此刻的目标 BPM：点之间线性插值，走完保持最后一档 */
   private curveBpmAt(t: number): number {
-    let bpm: number = this.stagesV.length > 0 ? this.stagesV[0].bpm : this.songBpmV;
-    for (let i = 0; i < this.stagesV.length; i++) {
-      if (t >= this.stagesV[i].atSec) {
-        bpm = this.stagesV[i].bpm;
-      } else {
-        break;
-      }
+    if (this.tempoPointsV.length === 0) {
+      return this.songBpmV;
     }
-    return bpm;
+    return tempoAt(this.tempoPointsV, t);
   }
 
   private stageIndexAt(t: number): number {
@@ -629,6 +693,7 @@ export class RunDemoEngine {
       offset: off,
       stageIndex: this.stageIndexAt(this.workoutSecV),
       stageName: this.stagesV.length > 0 ? this.stagesV[this.stageIndexAt(this.workoutSecV)].name : '',
+      workoutSec: this.workoutSecV,
       followState: this.followStateV,
       stepCount: this.stepCountV
     };

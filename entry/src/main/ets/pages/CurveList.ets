@@ -2,6 +2,7 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import {
+  ACTIVE_CURVE_KEY,
   appendCurve,
   count,
   CurveEditParam,
@@ -598,6 +599,8 @@ export struct CurveList {
     this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
       this.selectedIndex = index;
     });
+    // 告诉播放器"当前选中的是哪个曲线"（0 = 恒定BPM）：先选后用，播放时按它走
+    AppStorage.setOrCreate<number>(ACTIVE_CURVE_KEY, index);
   }
 
   /**

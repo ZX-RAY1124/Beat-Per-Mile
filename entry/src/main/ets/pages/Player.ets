@@ -12,9 +12,10 @@ import {
   loadSongDatabase,
   resolvePlaylistEntries,
   setCurrentSongKey,
-  songFilePath
+  songFilePath,
+  TempoPoint
 } from '../ets_libs/RunDemoEngine';
-import { loadAll as curveLoadAll } from '../ets_libs/CurveStore';
+import { ACTIVE_CURVE_KEY, CurveFile, CurvePointJson, loadAll as curveLoadAll } from '../ets_libs/CurveStore';
 import { ACTIVE_PLAYLIST_KEY, SongListJSON, loadAll as songListLoadAll } from '../ets_libs/PlayListStore';
 import {
   HARD_CUT_FADE_MS,
@@ -75,7 +76,7 @@ const TRACK_BG: string = '#E4E6EE';
 const PAGE_BG: string = '#FFFFFF';
 
 /** 模式分段控件 */
-const MODE_LABELS: string[] = ['动态检测', '恒速', '曲线'];
+const MODE_LABELS: string[] = ['动态检测', '预设'];   // 恒速/曲线已合并为「预设」
 const SEG_W: number = 74;
 const SEG_H: number = 30;
 const SEG_GAP: number = 4;
@@ -169,6 +170,21 @@ struct Player {
   @State stageIndex: number = 0;
   @State stageName: string = '';
   @State stages: CurveStage[] = [];
+  /** 运动时间（秒）—— 曲线的横轴，画游标用 */
+  @State workoutSec: number = 0;
+
+  // ---- 预设模式选中的曲线（来自「曲线列表」的 AppStorage 选择，先选后用）----
+  /** 是否选到了有效曲线；false 时预设模式走恒速 */
+  @State hasCurve: boolean = false;
+  @State curveName: string = '';
+  @State curvePoints: CurvePointJson[] = [];
+  /** 画曲线用的 BPM 量程 */
+  @State curveMinBpm: number = 100;
+  @State curveMaxBpm: number = 200;
+  private curveCanvasSettings: RenderingContextSettings = new RenderingContextSettings(true);
+  private curveCanvasCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.curveCanvasSettings);
+  /** 上次重画游标所在的整秒（避免每帧刷 Canvas） */
+  private curveDrawnSec: number = -999;
   @State followState: string = '待机';
   @State stepCount: number = 0;
   @State songName: string = '演示歌曲';
@@ -250,20 +266,40 @@ struct Player {
     this.filesDir = c.filesDir;
     this.loadSongList(c);
 
-    // 曲线：优先用磁盘上第一条曲线，否则用内置演示段
+    // 曲线：用「曲线列表」里选中的那条（AppStorage，先选后用）。
+    // 没选过 / 选的是「恒定BPM」(下标 0) / 点数不足 → 不做曲线，预设模式走恒速。
     try {
-      const curves = curveLoadAll(c);
-      if (curves.length > 0 && curves[0].points.length > 0) {
-        const ts: number[] = [];
-        const bpms: number[] = [];
-        for (let i = 0; i < curves[0].points.length; i++) {
-          ts.push(curves[0].points[i].time);
-          bpms.push(curves[0].points[i].bpm);
+      const ci: number | undefined = AppStorage.get<number>(ACTIVE_CURVE_KEY);
+      if (ci !== undefined && ci >= 1) {
+        const curves: CurveFile[] = curveLoadAll(c);
+        if (ci - 1 < curves.length) {
+          const f: CurveFile = curves[ci - 1];
+          if (f.points.length >= 2) {
+            const pts: TempoPoint[] = [];
+            let lo: number = f.points[0].bpm;
+            let hi: number = f.points[0].bpm;
+            for (let i = 0; i < f.points.length; i++) {
+              pts.push({ time: f.points[i].time, bpm: f.points[i].bpm, type: f.points[i].type });
+              lo = Math.min(lo, f.points[i].bpm);
+              hi = Math.max(hi, f.points[i].bpm);
+            }
+            this.engine.setCurvePoints(pts);
+            this.hasCurve = true;
+            this.curveName = f.name;
+            this.curvePoints = f.points;
+            const pad: number = Math.max(5, (hi - lo) * 0.15);
+            this.curveMinBpm = lo - pad;
+            this.curveMaxBpm = hi + pad;
+            console.info('[player] 曲线「' + f.name + '」: ' + pts.length + ' 个点（线性插值）');
+          } else {
+            console.warn('[player] 选中的曲线点数不足（' + f.points.length + '），预设模式改用恒速');
+          }
         }
-        this.engine.setStagesFromPoints(ts, bpms);
+      } else {
+        console.info('[player] 未选择曲线，预设模式使用恒定 BPM');
       }
     } catch (e) {
-      console.error('读取曲线失败，使用内置演示曲线：' + JSON.stringify(e));
+      console.error('读取曲线失败，预设模式使用恒定 BPM：' + JSON.stringify(e));
     }
 
     this.songName = this.engine.getSongName();
@@ -356,10 +392,10 @@ struct Player {
           Column() {
             if (this.mode === MODE_DYNAMIC) {
               this.DynamicPanel()
-            } else if (this.mode === MODE_CONSTANT) {
-              this.ConstantPanel()
-            } else {
+            } else if (this.mode === MODE_CURVE) {
               this.CurvePanel()
+            } else {
+              this.ConstantPanel()      // 预设 + 没选曲线 = 恒速
             }
           }
           .width('100%')
@@ -491,19 +527,19 @@ struct Player {
         .borderRadius(8)
         .backgroundColor(Color.White)
         .shadow({ radius: 6, color: '#14000000', offsetX: 0, offsetY: 1 })
-        .offset({ x: this.mode * (SEG_W + SEG_GAP) })
+        .offset({ x: this.modeSegment() * (SEG_W + SEG_GAP) })
 
       Row({ space: SEG_GAP }) {
         ForEach(MODE_LABELS, (label: string, index: number) => {
           Text(label)
             .fontSize(12)
-            .fontWeight(this.mode === index ? FontWeight.Medium : FontWeight.Normal)
-            .fontColor(this.mode === index ? ACCENT : TEXT_SECONDARY)
+            .fontWeight(this.modeSegment() === index ? FontWeight.Medium : FontWeight.Normal)
+            .fontColor(this.modeSegment() === index ? ACCENT : TEXT_SECONDARY)
             .width(SEG_W)
             .height(SEG_H)
             .textAlign(TextAlign.Center)
             .onClick(() => {
-              this.switchMode(index);
+              this.selectSegment(index);
             })
         }, (label: string) => label)
       }
@@ -644,34 +680,29 @@ struct Player {
   CurvePanel() {
     Column({ space: 10 }) {
       Row() {
-        Text('曲线段（运动时间轴 · 暂停时冻结）')
+        Text(this.curveName.length > 0 ? ('曲线：' + this.curveName) : '曲线')
           .fontSize(12)
           .fontColor(TEXT_SECONDARY)
           .layoutWeight(1)
-        Text('当前：' + this.stageName + ' ' + this.targetBpm.toFixed(0) + ' BPM')
+        Text('目标 ' + this.targetBpm.toFixed(0) + ' BPM')
           .fontSize(12)
           .fontColor(ACCENT)
       }
       .width('100%')
 
-      Row({ space: 8 }) {
-        ForEach(this.stages, (st: CurveStage, index: number) => {
-          Column({ space: 2 }) {
-            Text(st.name)
-              .fontSize(12)
-              .fontColor(index === this.stageIndex ? Color.White : TEXT_PRIMARY)
-            Text(st.bpm.toFixed(0) + ' BPM')
-              .fontSize(11)
-              .fontColor(index === this.stageIndex ? Color.White : TEXT_SECONDARY)
-          }
-          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-          .backgroundColor(index === this.stageIndex ? ACCENT : FIELD_BG)
-          .borderRadius(10)
-        }, (st: CurveStage, index: number) => st.name + index.toString())
-      }
-      .width('100%')
+      Canvas(this.curveCanvasCtx)
+        .width('100%')
+        .height(110)
+        .backgroundColor(FIELD_BG)
+        .borderRadius(10)
+        .onReady(() => {
+          this.drawCurve();
+        })
+        .onAreaChange(() => {
+          this.drawCurve();
+        })
 
-      Text('曲线来自「曲线列表」的第一条；没有曲线时用内置演示段（热身/目标/放松）。')
+      Text('按「曲线列表」中选中的曲线走：点之间线性插值，走完保持最后一档。')
         .fontSize(11)
         .fontColor(TEXT_TERTIARY)
         .width('100%')
@@ -682,6 +713,72 @@ struct Player {
         .width('100%')
     }
     .width('100%')
+  }
+
+  /** 画选中的曲线 + 当前运动时间游标 + 当前目标 BPM 点 */
+  private drawCurve(): void {
+    const w: number = this.curveCanvasCtx.width;
+    const h: number = this.curveCanvasCtx.height;
+    const n: number = this.curvePoints.length;
+    if (w <= 0 || h <= 0 || n < 2) {
+      return;
+    }
+    this.curveCanvasCtx.clearRect(0, 0, w, h);
+
+    const pad: number = 8;
+    const t0: number = this.curvePoints[0].time;
+    const t1: number = this.curvePoints[n - 1].time;
+    const span: number = (t1 - t0) > 0 ? (t1 - t0) : 1;
+    const lo: number = this.curveMinBpm;
+    const hi: number = this.curveMaxBpm > lo ? this.curveMaxBpm : (lo + 1);
+    const xOf = (t: number): number => {
+      return pad + (t - t0) / span * (w - pad * 2);
+    };
+    const yOf = (b: number): number => {
+      return pad + (1 - (b - lo) / (hi - lo)) * (h - pad * 2);
+    };
+
+    // 折线：linear 插值就是直连，形状一致
+    this.curveCanvasCtx.beginPath();
+    this.curveCanvasCtx.moveTo(xOf(this.curvePoints[0].time), yOf(this.curvePoints[0].bpm));
+    for (let i = 1; i < n; i++) {
+      this.curveCanvasCtx.lineTo(xOf(this.curvePoints[i].time), yOf(this.curvePoints[i].bpm));
+    }
+    this.curveCanvasCtx.strokeStyle = ACCENT;
+    this.curveCanvasCtx.lineWidth = 2;
+    this.curveCanvasCtx.lineJoin = 'round';
+    this.curveCanvasCtx.stroke();
+
+    // 顶点
+    this.curveCanvasCtx.fillStyle = ACCENT;
+    for (let i = 0; i < n; i++) {
+      this.curveCanvasCtx.beginPath();
+      this.curveCanvasCtx.arc(xOf(this.curvePoints[i].time), yOf(this.curvePoints[i].bpm),
+        2.5, 0, Math.PI * 2);
+      this.curveCanvasCtx.fill();
+    }
+
+    // 当前运动时间游标（超出范围就钉在两端）
+    let tNow: number = this.workoutSec;
+    if (tNow < t0) {
+      tNow = t0;
+    }
+    if (tNow > t1) {
+      tNow = t1;
+    }
+    const cx: number = xOf(tNow);
+    this.curveCanvasCtx.beginPath();
+    this.curveCanvasCtx.moveTo(cx, pad);
+    this.curveCanvasCtx.lineTo(cx, h - pad);
+    this.curveCanvasCtx.strokeStyle = '#2FB3A8';
+    this.curveCanvasCtx.lineWidth = 1.5;
+    this.curveCanvasCtx.stroke();
+
+    // 当前目标 BPM 的落点
+    this.curveCanvasCtx.beginPath();
+    this.curveCanvasCtx.arc(cx, yOf(this.targetBpm), 3.5, 0, Math.PI * 2);
+    this.curveCanvasCtx.fillStyle = '#2FB3A8';
+    this.curveCanvasCtx.fill();
   }
 
   // ==================== 小组件 ====================
@@ -1328,15 +1425,32 @@ struct Player {
       return '动态检测（步频跟随）';
     }
     if (this.mode === MODE_CONSTANT) {
-      return '恒速（目标 ' + this.constBpm.toFixed(0) + ' BPM）';
+      return '预设 · 恒速（' + this.constBpm.toFixed(0) + ' BPM）';
     }
-    return '曲线（' + this.stageName + '）';
+    return '预设 · 曲线（' + this.curveName + '）';
   }
 
   /** 总拍数（估算，给调试区用） */
   private totalBeats(): number {
     const period: number = this.songBpm > 0 ? 60.0 / this.songBpm : 0.5;
     return Math.max(0, Math.floor(this.durSec / period));
+  }
+
+  /** 分段控件下标：0 = 动态，1 = 预设（恒速/曲线已合并） */
+  private modeSegment(): number {
+    return this.mode === MODE_DYNAMIC ? 0 : 1;
+  }
+
+  /**
+   * 分段控件选择：
+   *   0 → 动态检测；
+   *   1 → 预设：选到曲线就走曲线，否则走恒速（先选后用，播放中不换）。
+   */
+  private selectSegment(seg: number): void {
+    const target: number = (seg === 0)
+      ? MODE_DYNAMIC
+      : (this.hasCurve ? MODE_CURVE : MODE_CONSTANT);
+    this.switchMode(target);
   }
 
   private switchMode(index: number): void {
@@ -1518,10 +1632,20 @@ struct Player {
     this.beatOffset = s.offset;
     this.stageIndex = s.stageIndex;
     this.stageName = s.stageName;
+    this.workoutSec = s.workoutSec;
     this.followState = s.followState;
     this.stepCount = s.stepCount;
     this.mode = s.mode;
     this.playing = s.playing;
+
+    // 曲线游标：按整秒重画，避免每帧刷 Canvas
+    if (this.mode === MODE_CURVE) {
+      const sec: number = Math.floor(this.workoutSec);
+      if (sec !== this.curveDrawnSec) {
+        this.curveDrawnSec = sec;
+        this.drawCurve();
+      }
+    }
 
     // ★ 动态模式接上 native 管线后，步频/倍速/状态机以 native 为准
     if (this.pipelineOn) {
