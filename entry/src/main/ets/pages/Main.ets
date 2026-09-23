@@ -57,6 +57,9 @@ struct Main {
   CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
   PAGE_BG: string = '#F5F6F8';
 
+  @State Times: number = 0 //今日运动次数
+  @State Steps : number = 0 //运动步数
+  @State ArrangeBPM : number = 0 //平均BPM数
 
   @State Button_1 : Center_Button = new Center_Button(1)
   @State Button_2 : Center_Button = new Center_Button(2)
@@ -64,13 +67,15 @@ struct Main {
 
   @State page_name_list : string[] = ["今日统计","歌单列表","曲线选择","设置"];
   @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
-  @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',0, '次数'),
-    new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
-    new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')];
+  @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',this.Times, '次数'),
+    new topColumnMaker('sys.symbol.figure_running','步',this.Steps, '步数'),
+    new topColumnMaker('sys.symbol.identify_song','BPM',this.ArrangeBPM, '平均BPM')];
 
   @State Curves_make_sure: boolean = false;  // 触发器状态
   @State PlayList_make_sure: boolean = false;
   @State Loading_From_server_sure : boolean = false;
+
+
 
 
   @Builder
