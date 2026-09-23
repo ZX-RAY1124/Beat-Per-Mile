@@ -12,6 +12,12 @@ struct MainPlayer {
     new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
   @State navPathStack :NavPathStack = new NavPathStack();
 
+  @Prop value: number = 0;
+  @Prop valueText: string = '';
+  @Prop min: number = 0;
+  @Prop max: number = 100;
+  step: number = 1;
+
   @State Status:string[] = ["正在运动","暂停","加速中","减速中"]
   @State Button_1 : Center_Button = new Center_Button(1)
   @State outCircle: Center_Button = new Center_Button(2)
@@ -29,6 +35,13 @@ struct MainPlayer {
   CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
   CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
   PAGE_BG: string = '#F5F6F8';
+  @State offset_bar: number = 0;
+  @State gesture_start: number = 0;
+
+
+  @State BPM_now : number = 0;
+  @State BPM_Average: number = 0;
+  @State sport_time: number[] = [0,0,0]
 
   @Builder
   Column_UP(index:number){
@@ -57,28 +70,183 @@ struct MainPlayer {
     .margin(5);
   }
 
+  @Builder
+  SideButton(text: string, callback:() => void){
+    Button(){
+      SymbolGlyph($r(text))
+        .fontSize(30)
 
+    }
+      .borderRadius(5)
+      .fontColor(Color.Black)
+      .height(55)
+      .width(55)
+      .backgroundColor(Color.Transparent)
+      .onClick(() => {
+        callback();
+      })
+  }
 
   @Builder FloatWidgetBuild(){
     Column(){
-      Column()
-        .width(45)
-        .height(45)
-        .borderRadius(5)
+      Column({space:10}){
+        this.SideButton('sys.symbol.forward_end_fill',() => {})
+        this.SideButton('sys.symbol.pause',() => {})
+        this.SideButton('sys.symbol.backward_end_fill',() => {})
+
+      }
+        .width(60)
+        .height(280)
+        .borderRadius(15)
         .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
         .alignItems(HorizontalAlign.Center)
         .justifyContent(FlexAlign.Center)
-    }.position({right:0, top:50})
+
+    }.position({right:0, top:this.offset_bar})
+
+    .gesture(PanGesture({direction:PanDirection.Vertical})
+      .onActionUpdate((event: GestureEvent) => {
+        this.getUIContext()?.animateTo({ duration: 40, curve: Curve.EaseOut }, () => {
+          this.offset_bar = event.offsetY + this.gesture_start // >0 上滑  <0 下滑
+        })
+      })
+      .onActionEnd(() => {
+        this.gesture_start = this.offset_bar;
+      }))
+
+
   }
+  @State G_COLOR:string = this.colorList[this.getRandomInt(0,2)];
 
+  @Builder Song_Column(){
+    Column(){
+      Row({space:25}){
+        Column() {
+          SymbolGlyph($r('sys.symbol.opticaldisc'))
+            .fontSize(64)
+            .fontColor([Color.White])
+        }
+        .width(130)
+        .height(130)
+        .borderRadius(10)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .offset({x: 15})
+        .linearGradient({
+          angle: 145,
+          colors: [['#FF6B6B', 0.0], ['#A78BFA', 1.0]]
+        })
 
+        Column({space:10}){
+          Text("+00:00").fontWeight(FontWeight.Bold).fontSize(25)
+          Text("-03:21").fontWeight(FontWeight.Bold).fontSize(25)
+        }
+      }.width("100%").height("70%")
+      Column(){
+        Text('Lost Memory').fontWeight(FontWeight.Medium).fontSize(25)
+        Text('Sakuzyo').fontWeight(FontWeight.Regular).fontSize(18).fontColor(Color.Gray)
 
+      }
+
+    }.width(250)
+    .height(250)
+    .borderRadius(15)
+    .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
+    .position({x:25, y:240})
+    .borderColor(this.G_COLOR)
+    .borderWidth({
+      left:this.CARD_BORDER_OTHER,
+      right:this.CARD_BORDER_OTHER,
+      top:this.CARD_BORDER_TOP,
+      bottom:this.CARD_BORDER_OTHER
+    })
+
+  }
 
   build(){
     HdsNavDestination(){
       Column(){
+        Row({space:40}) {
 
-      }
+          Column(){
+            SymbolGlyph($r('sys.symbol.identify_song'))
+              .fontSize(40)
+              .fontColor([this.colorList[0]])
+              .padding({ bottom: 10 });
+            Text('BPM').fontSize(15)
+            Text('170').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+
+          }.height(130)
+          .width("20%")
+          .justifyContent(FlexAlign.Center)
+
+
+
+          Column() {
+            SymbolGlyph($r('sys.symbol.figure_running'))
+              .fontSize(40)
+              .fontColor([this.colorList[0]])
+              .padding({ bottom: 10 });
+            Text('运动时间').fontSize(15)
+            Text('01:30:20').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+
+          }.height(130)
+          .width("20%")
+          .justifyContent(FlexAlign.Center)
+
+          Column(){
+            SymbolGlyph(($r('sys.symbol.list_interrupt')))
+              .fontSize(40)
+              .fontColor([this.colorList[0]])
+              .padding({ bottom: 10 });
+            Text('平均BPM').fontSize(15)
+            Text('149').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+
+          }.height(140)
+          .width("20%")
+          .justifyContent(FlexAlign.Center)
+        }
+
+
+        Row(){
+          Slider({
+            value: this.value,
+            min: this.min,
+            max: this.max,
+            step: this.step,
+            style: SliderStyle.NONE
+          }).height(20)
+            .width("90%")
+            .selectedColor(this.G_COLOR)
+            .blockColor(Color.White)
+            .onChange((value: number) => {
+
+            })
+        }.width("100%").height("40%").justifyContent(FlexAlign.Center)
+
+      }.height(140).width("90%").borderRadius(20)
+      .justifyContent(FlexAlign.Center)
+      .borderColor(this.G_COLOR)
+      .backgroundColor(Color.White)
+      .borderWidth({
+        left:this.CARD_BORDER_OTHER,
+        right:this.CARD_BORDER_OTHER,
+        top:this.CARD_BORDER_OTHER,
+        bottom:this.CARD_BORDER_TOP,
+      })
+      .offset({ top: $r('sys.float.single_line_titlebar_height') })
+      .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
+      .margin(5);
+
+      Row({space:40}){
+        Column().width(110).height(110).backgroundColor('#4ECDC4').clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+      }.width("100%").justifyContent(FlexAlign.Center).offset({y:500}).zIndex(2)  //调整优先级
+
+
+      this.Song_Column()
+
+
+
 
       Column() {
 
@@ -100,13 +268,18 @@ struct MainPlayer {
           .onClick(() => {
 
           })
+          .padding({ top: $r('sys.float.single_line_titlebar_height') })
+          .borderColor(this.colorList[this.getRandomInt(0,3)])
           .renderGroup(true)
 
 
           Column() {
 
           }
-          .backgroundColor(Color.Orange)
+          .linearGradient({
+            angle: 135,
+            colors: [['#ffee3939', 0.0], ['#A78BFA', 1.0]]
+          })
           .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
           .height(240)
           .width(240)
@@ -120,11 +293,13 @@ struct MainPlayer {
 
 
         Column() {
-          Column() {
+          Column() {         //切换器
 
           }
-          .backgroundColor(Color.Blue)
-          .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+          .linearGradient({
+            angle: 120 ,
+            colors: [['#FF6B6B', 0.0],['#A78BFA', 1.0]]
+          })          .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
           .height(240)
           .width(240)
           .scale({ x: this.Button_1.button_zoom_x, y: this.Button_1.button_zoom_y })
@@ -147,6 +322,7 @@ struct MainPlayer {
     .height('100%')
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
+
 
 
 
@@ -178,6 +354,13 @@ struct MainPlayer {
     })
 
     .titleBar({content:{title:{mainTitle:this.Status[0],mainTitleSize:20}}})
+  }
+
+
+  private getRandomInt(min: number, max: number): number {
+    min = Math.ceil(min);
+    max = Math.floor(max);
+    return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 }
 

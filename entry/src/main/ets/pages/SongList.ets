@@ -1,7 +1,7 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { picker } from '@kit.CoreFileKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { SongJSON, SongListJSON, selection, saveAt, totalSongList, SongJSON_ROW } from '../ets_libs/PlayListStore';
+import { SongJSON, SongListJSON, selection, saveAt, totalSongList, SongJSON_ROW, bumpRevision } from '../ets_libs/PlayListStore';
 import { common } from '@kit.AbilityKit';
 import call from '@ohos.telephony.call';
 import { loadAll } from '../ets_libs/CurveStore';
@@ -34,17 +34,18 @@ class SongData {
   duration: string;
   type:selection;
 
-  constructor(title: string, artist: string, bpm: number, duration: string = '') {
+  constructor(title: string, artist: string, bpm: number, duration: string = '', type_: selection = selection.OFFLINE) {
     this.title = title;
     this.artist = artist;
     this.bpm = bpm;
     this.duration = duration;
-    this.type = selection.OFFLINE;    //要改,测试用
+    this.type = type_;    //要改,测试用
   }
 }
 
 /** 演示数据 */
 let SONGS: SongData[] = [
+  /*
   new SongData('Crave Wave', 'LandRoot', 150),
   new SongData('The Chariot ~REVIIVAL~', 'Attoclef', 190),
   new SongData('Luminescence', '米虾Fomiki & 初云CLoudie', 184),
@@ -57,6 +58,7 @@ let SONGS: SongData[] = [
   new SongData('Chronomia', 'Lime', 227),
   new SongData('Chronos Collapse - La Campanella', 'SunsetRay', 180),
   new SongData("Rrhar'il", 'Team Grimoire', 190),
+  * */
 ];
 
 /** 行的尺寸与配色 */
@@ -254,6 +256,7 @@ export struct SongList {
       this.SONG_LIST_NAME = param.name;
       this.COLOR_PLAN = param.colorPlan;
       this.G_INDEX = param.index - 1;
+      this.reload_SongList();
 
       if(param !== undefined && param !== null){
         this.loadPlayList(param.songList)
@@ -273,25 +276,21 @@ export struct SongList {
               componentId: "menu_1",
               isEnabled:true,
               action: () => {
-                load_from_native(this.getUIContext().getHostContext() as common.UIAbilityContext).then((dir: string) => {
-                  if (dir.length === 0) {
-                    console.error('未选择音频文件，跳过分析');
-                    return;
-                  }
-                  // 起一个进度定时器：native 侧按阶段/百分比回报，done/failed 自动收尾
-                  const progressTimer = startAnalyseProgress();
-                  // ★ 异步分析：不阻塞主线程；CSV 生成在 <filesDir>/Media/ 下
-                  analyzeMusicAsync(dir, (meta: SongMeta | null, err?: string) => {
-                    clearInterval(progressTimer);
-                    if (meta !== null) {
-                      // native 已从容器元数据取到歌名/作者/时长，并算好 BPM
-                      console.info(`分析完成: ${meta.name} · ${meta.author} · ${meta.time} · ${meta.BPM} BPM`);
-                      this.add_music(meta.name, meta.BPM, meta.author,meta.time, selection.OFFLINE)
-                    } else {
-                      console.error(`分析失败: ${err ?? '未知原因'}`);
+                importFromPicker(this.getUIContext().getHostContext() as common.UIAbilityContext)
+                  .then((paths: string[]) => {
+                    if (paths.length === 0) {
+                      console.error('未导入任何文件，跳过分析');
+                      return;
                     }
-                  });
-                })
+                    console.info(`导入 ${paths.length} 首，开始逐首分析…`);
+                    // 逐首串行分析：native 的进度状态是单例，并行会互相覆盖
+                    analyzeSequentially(paths, (meta: SongMeta) => {
+                      this.add_music(meta.name, meta.BPM, meta.author, meta.time, selection.OFFLINE);
+                    }).then(() => {
+                      // 全部落库完成后再重读一次，保证界面看到完整列表
+                      this.reload_SongList();
+                    });
+                  })
               }
             }, badge: {}
           },
@@ -600,21 +599,49 @@ export struct SongList {
     const ctx: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const path: string = ctx.filesDir + '/Media/Songs.json';
     try {
-      let fd = fs.openSync(path, fs.OpenMode.READ_WRITE| fs.OpenMode.CREATE)
+      let fd = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE)
       let file = fs.readTextSync(path);
       let songList : totalSongList = {songList:[]};
       if(file) {
         songList = JSON.parse(file) as totalSongList;
       }
       songList.songList.push(formalData);
-      fs.writeSync(fd.fd, JSON.stringify(songList));
-
+      const text: string = JSON.stringify(songList);
+      // ⚠️ writeSync 不截断：新内容比旧内容短时，旧文件尾部会残留，
+      //    读出的是 "……}]}旧尾巴"，JSON.parse 直接抛错。
+      //    必须先 truncate 到新长度（或先清空），否则第二次写入就坏。
+      fs.truncateSync(path, 0);
+      fs.writeSync(fd.fd, text);
+      fs.closeSync(fd);
+      // 通知监听方（Playlist.ets 的 @StorageLink('songListStoreRevision')）重读
+      bumpRevision();
     } catch (e){
       console.error(`Face Error in load music List: ${e}`)
     }
 
 
 
+  }
+
+  private reload_SongList(){
+    try {
+      SONGS = [];   //全局歌单清零
+      const ctx: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const path: string = ctx.filesDir + '/Media/Songs.json';
+      let fd = fs.openSync(path, fs.OpenMode.READ_WRITE| fs.OpenMode.CREATE)
+      let file = fs.readTextSync(path);
+      let songList : totalSongList = {songList:[]};
+      if(file) {
+        songList = JSON.parse(file) as totalSongList;
+      }
+      songList.songList.forEach((item: SongJSON) => {
+        SONGS.push(
+          new SongData(item.name, item.author, item.BPM, item.time, item.type),
+        )
+      })
+    } catch (e){
+      console.error(`Face Error in load music List: ${e}`)
+    }
   }
 
 
@@ -743,42 +770,40 @@ function toAscii(bytes: Uint8Array, n: number): string {
   return out;
 }
 
+/** picker 里最多允许选择的文件数（AudioSelectOptions.maxSelectNumber，API 12+） */
+const MAX_SELECT_NUMBER: number = 50;
+
 /**
  * ⚠️⚠️ 这里踩过一个坑，务必别再犯：
  *
- * 早期版本在本函数里为了"探测源文件大小/可读性"，对 probeFile.fd 调了
+ * 早期版本在拷贝**之前**为了"探测源文件大小/可读性"，对同一个 fd 调了
  * fs.readSync / fs.read 各读 16 字节。这些调用**是有效的读操作**，会把
- * 文件描述符的游标推进 32 字节；随后的拷贝循环复用同一个 fd，于是
- * **从第 32 字节开始拷贝**，目标文件丢掉开头 32 字节。
+ * 文件描述符的游标推进 32 字节；随后复用同一个 fd 的拷贝循环于是
+ * **从第 32 字节开始拷贝**，目标文件稳定丢掉开头 32 字节。
  *
  * 后果（两个都真实发生过）：
  *   · wav ：丢了 RIFF + fmt 块 ⇒ FFmpeg 算不出总时长（"总长未知"）；
  *   · m4a ：丢了 ftyp box  ⇒ avformat_open_input 直接报
  *            "Invalid data found when processing input"。
  *
- * 结论：**任何一次"只看一眼"的读都会移动游标。拷贝必须用一个全新的 fd。**
+ * 而且它**极其隐蔽**：丢的是固定 32 字节，copied 与 dstSize 依然完全相等，
+ * "大小一致就算成功"这种校验永远查不出来。
+ *
+ * 结论：**任何一次"只看一眼"的读都会移动游标。探测用的 fd 必须即用即关，
+ *       拷贝必须用一个全新的 fd。**
  */
-async function load_from_native(context: common.Context) : Promise<string>{
-  const mPicker = new picker.AudioViewPicker(context);
-  const options = new picker.AudioSelectOptions();
 
-  const uris: Array<string> = await mPicker.select(options);
-  if (uris === undefined || uris.length === 0) {
-    console.warn('[import] 用户没有选择任何音频文件');
-    return '';
-  }
-  const srcUri: string = uris[0];
-  console.info(`[import] picker 返回 uri=${srcUri}`);
-
+/** 把一个源 uri 拷贝到沙箱 Media 目录。成功返回目标路径，失败返回 '' */
+async function copyUriToSandbox(context: common.Context, srcUri: string): Promise<string> {
   const mediaDir = `${context.filesDir}/Media`;
   if (!fs.accessSync(mediaDir)) {
     fs.mkdirSync(mediaDir);
   }
 
   // ---- 1. 探测源文件：拿到文件名 + 头部字节，看完【立刻关闭】----
-  //         绝不让这个 fd 活到拷贝阶段（见函数头注释）
+  //         绝不让这个 fd 活到拷贝阶段（见下方注释）
   let fileName: string = 'unknown.bin';
-  let srcHead: string = '(未取到)';
+  let srcHead: string = '';
   try {
     const probe = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);
     fileName = probe.name;
@@ -786,21 +811,33 @@ async function load_from_native(context: common.Context) : Promise<string>{
     const n: number = fs.readSync(probe.fd, head);
     const bytes = new Uint8Array(head);
     srcHead = `${n}B hex=[${toHex(bytes, n)}] ascii=[${toAscii(bytes, n)}]`;
-    fs.closeSync(probe);                 // ★ 立刻关闭
+    fs.closeSync(probe);                 // ★ 立刻关闭，别让游标状态流到拷贝环节
   } catch (e) {
-    console.error(`[import] 打开/读取源文件失败: ${err2str(e)}`);
+    console.error(`[import] 打开/读取源文件失败 uri=${srcUri}: ${err2str(e)}`);
     return '';
   }
-  const destPath: string = `${mediaDir}/${fileName}`;
-  console.info(`[import] 源文件 name=${fileName}`);
-  console.info(`[import] 源头部 ${srcHead}`);
+  console.info(`[import] 源 ${fileName}  头部 ${srcHead}`);
 
-  // ---- 2. 清理旧目标（同名目录是早期版本遗留的 bug）----
+  // ---- 2. 解决重名：同名文件已存在时加 -1 / -2 后缀，不覆盖已有导入 ----
+  let destPath: string = `${mediaDir}/${fileName}`;
   if (fs.accessSync(destPath)) {
     if (fs.statSync(destPath).isDirectory()) {
+      // 早期版本在同名路径上遗留过目录
       fs.rmdirSync(destPath);
     } else {
-      fs.unlinkSync(destPath);
+      const dot: number = fileName.lastIndexOf('.');
+      const stem: string = (dot > 0) ? fileName.substring(0, dot) : fileName;
+      const ext: string = (dot > 0) ? fileName.substring(dot) : '';
+      let k: number = 1;
+      while (k < 1000) {
+        const cand: string = `${mediaDir}/${stem}-${k}${ext}`;
+        if (!fs.accessSync(cand)) {
+          destPath = cand;
+          break;
+        }
+        k++;
+      }
+      console.info(`[import] 同名文件已存在，改存为 ${destPath}`);
     }
   }
 
@@ -825,7 +862,7 @@ async function load_from_native(context: common.Context) : Promise<string>{
     fs.closeSync(dstFile);
     dstFile = undefined;
   } catch (e) {
-    console.error(`[import] 拷贝失败: ${err2str(e)}`);
+    console.error(`[import] 拷贝失败 ${fileName}: ${err2str(e)}`);
     return '';
   } finally {
     if (srcFile !== undefined) {
@@ -843,50 +880,25 @@ async function load_from_native(context: common.Context) : Promise<string>{
   }
 
   const dstSize: number = fs.statSync(destPath).size;
-  console.info(`[import] 拷贝完成: copied=${copied} dstSize=${dstSize}`);
+  console.info(`[import] 拷贝完成 ${fileName}: copied=${copied} dstSize=${dstSize}`);
 
   // ---- 4. 逐字节校验（不再依赖任何"大小看起来对"的间接判断）----
-  //   只比前 1MB：字节级偏移错误必然在开头就暴露，
-  //   整文件两遍读在几百 MB 的音频上太慢。
-  let verdict: string = '';
+  //   只比前 1MB：字节级偏移错误必然在开头就暴露，整文件两遍读太慢。
   let firstDiff: number = -1;
-  let dstHead: string = '';
-  let headEqual: boolean = false;
-  let compared: number = 0;
   try {
     const a = fs.openSync(srcUri, fs.OpenMode.READ_ONLY);
     const b = fs.openSync(destPath, fs.OpenMode.READ_ONLY);
-    // 先各自读头部，用于"源头部 / 目标头部"对照（必须在遍历前读，否则游标已到末尾）
-    const ha = new ArrayBuffer(32);
-    const hb = new ArrayBuffer(32);
-    const na0: number = fs.readSync(a.fd, ha);
-    const nb0: number = fs.readSync(b.fd, hb);
-    const ba = new Uint8Array(ha);
-    const bb = new Uint8Array(hb);
-    dstHead = `${nb0}B hex=[${toHex(bb, nb0)}] ascii=[${toAscii(bb, nb0)}]`;
-    headEqual = (na0 === nb0);
-    if (headEqual) {
-      for (let i = 0; i < na0; i++) {
-        if (ba[i] !== bb[i]) {
-          headEqual = false;
-          firstDiff = i;
-          break;
-        }
-      }
-    }
-
     const va = new ArrayBuffer(COPY_CHUNK_SIZE);
     const vb = new ArrayBuffer(COPY_CHUNK_SIZE);
     const ua = new Uint8Array(va);
     const ub = new Uint8Array(vb);
-    const kVerifyBytes: number = 1024 * 1024;   // 1MB 足够暴露任何字节级偏移错误
-    compared = 0;
-
+    const kVerifyBytes: number = 1024 * 1024;
+    let compared: number = 0;
     while (compared < kVerifyBytes) {
       const na: number = fs.readSync(a.fd, va);
       const nb: number = fs.readSync(b.fd, vb);
       if (na !== nb) {
-        verdict = `长度不一致（src 读 ${na}，dst 读 ${nb}）`;
+        firstDiff = compared;
         break;
       }
       if (na <= 0) {
@@ -894,9 +906,7 @@ async function load_from_native(context: common.Context) : Promise<string>{
       }
       for (let i = 0; i < na; i++) {
         if (ua[i] !== ub[i]) {
-          if (firstDiff < 0) {
-            firstDiff = compared + i;
-          }
+          firstDiff = compared + i;
           break;
         }
       }
@@ -907,30 +917,100 @@ async function load_from_native(context: common.Context) : Promise<string>{
     }
     fs.closeSync(a);
     fs.closeSync(b);
-
-    if (verdict.length === 0) {
-      verdict = (firstDiff < 0) ? `前 ${compared}B 完全一致` : `首个不同字节在偏移 ${firstDiff}`;
-    }
   } catch (e) {
-    verdict = `校验本身出错: ${err2str(e)}`;
+    console.error(`[import] 校验出错 ${fileName}: ${err2str(e)}`);
+    return '';
   }
-  console.info(`[import] 目标头部 ${dstHead}`);
-  console.info(`[import] 校验结果: ${verdict}（头部一致=${headEqual}）`);
 
   if (copied === 0 || dstSize === 0) {
-    console.error('[import] ❌ 目标文件为 0 字节：拷贝没有写入任何数据');
+    console.error(`[import] ❌ ${fileName} 目标文件为 0 字节，放弃`);
     return '';
   }
   if (copied !== dstSize) {
-    console.error(`[import] ❌ 写入字节数与目标大小不一致（copied=${copied} dst=${dstSize}）`);
+    console.error(`[import] ❌ ${fileName} 写入字节数与目标大小不一致（${copied} vs ${dstSize}）`);
     return '';
   }
   if (firstDiff >= 0) {
-    console.error(`[import] ❌ 拷贝内容与源不一致（偏移 ${firstDiff}），文件已损坏，放弃分析`);
+    console.error(`[import] ❌ ${fileName} 拷贝内容与源不一致（偏移 ${firstDiff}），放弃`);
     return '';
   }
 
-  console.info('[import] ✅ 拷贝校验通过');
+  console.info(`[import] ✅ ${fileName} 拷贝校验通过`);
   return destPath;
 }
+
+/**
+ * 导入入口：拉起 picker（支持多选），把选中的文件**全部**拷进沙箱。
+ * 返回成功拷贝的沙箱路径数组；用户取消或全部失败时返回空数组。
+ *
+ * 注意：这里只负责"拷贝"，不做分析 —— 分析放回组件里串行触发，
+ *       这样进度提示能按"第 i / N 首"显示。
+ */
+async function importFromPicker(context: common.Context): Promise<string[]> {
+  const mPicker = new picker.AudioViewPicker(context);
+  const options = new picker.AudioSelectOptions();
+  // ★ 默认值是 1，不设就只能选一首（AudioSelectOptions.maxSelectNumber，API 12+）
+  options.maxSelectNumber = MAX_SELECT_NUMBER;
+
+  let uris: Array<string> = [];
+  try {
+    uris = await mPicker.select(options);
+  } catch (e) {
+    console.error(`[import] 拉起选择器失败: ${err2str(e)}`);
+    return [];
+  }
+  if (uris === undefined || uris.length === 0) {
+    console.warn('[import] 用户没有选择任何音频文件');
+    return [];
+  }
+  console.info(`[import] picker 返回 ${uris.length} 个文件`);
+
+  const paths: string[] = [];
+  for (let i = 0; i < uris.length; i++) {
+    const out: string = await copyUriToSandbox(context, uris[i]);
+    if (out.length > 0) {
+      paths.push(out);
+    }
+  }
+  console.info(`[import] 导入结束: 成功 ${paths.length} / 共 ${uris.length}`);
+  return paths;
+}
+
+/**
+ * 逐首串行分析。
+ *
+ * 为什么必须串行：native 侧的分析进度是**一份全局状态**
+ * （getAnalyseStatus 的 phase/pct），并发跑多首会互相覆盖；
+ * 而且 Essentia 的 multifeature 本身很吃 CPU，并发只会更慢。
+ *
+ * @param onResult 每首分析完成（成功才回调 meta）时通知上层，用于落库
+ */
+async function analyzeSequentially(paths: string[],
+                                   onResult: (meta: SongMeta) => void): Promise<void> {
+  const total: number = paths.length;
+  for (let i = 0; i < total; i++) {
+    const p: string = paths[i];
+    const name: string = p.substring(p.lastIndexOf('/') + 1);
+    if (total > 1) {
+      console.info(`[import] —— 分析 ${i + 1}/${total}: ${name} ——`);
+    }
+    const progressTimer: number = startAnalyseProgress();
+    await new Promise<void>((resolve: () => void) => {
+      analyzeMusicAsync(p, (meta: SongMeta | null, err?: string) => {
+        clearInterval(progressTimer);
+        if (meta !== null) {
+          console.info(`[import] ✅ ${i + 1}/${total} ${meta.name} · ${meta.author} · ${meta.time} · ${meta.BPM} BPM`);
+          onResult(meta);
+        } else {
+          console.error(`[import] ❌ ${i + 1}/${total} ${name} 分析失败: ${err ?? '未知原因'}`);
+        }
+        resolve();   // 无论成败都继续下一首
+      });
+    });
+  }
+  if (total > 0) {
+    console.info(`[import] 全部结束，共处理 ${total} 个文件`);
+  }
+}
+
 

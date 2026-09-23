@@ -377,7 +377,10 @@ struct Main {
 
 
                 }
-                .backgroundColor(Color.Blue)
+                .linearGradient({
+                  angle: 145,
+                  colors: [['#FF6B6B', 0.0], ['#A78BFA', 1.0]]
+                })
                 .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
                 .height(240)
                 .width(240)
