@@ -1640,6 +1640,23 @@ static napi_value stepPipelineSetTargetBpm(napi_env env, napi_callback_info info
     return nullptr;
 }
 
+/**
+ * stepPipelineSetChaseDelayWindow(sec) —— 动态模式「起步延迟校正」窗口（秒）。
+ *   窗口内 CHASE 走 TempoFollower 的 delayChase（不调歌曲速度，只平移 perfect 窗口
+ *   去框住脚步，无听感变速）；窗口过后自动回到普通相位调整。0 = 关闭。默认 50 秒。
+ */
+static napi_value stepPipelineSetChaseDelayWindow(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    double sec = 0.0;
+    if (argc >= 1) napi_get_value_double(env, args[0], &sec);
+    std::lock_guard<std::mutex> lk(g_stepMutex);
+    g_stepPipeline.setChaseDelayWindow(sec);
+    OH_LOG_INFO(LOG_APP, "[step] chase delay window = %{public}.1fs", sec);
+    return nullptr;
+}
+
 static napi_value stepPipelineStop(napi_env env, napi_callback_info info) {
     (void)env;
     (void)info;
@@ -1834,6 +1851,8 @@ static napi_value Init(napi_env env, napi_value exports)
         {"stepPipelineSetScenario", nullptr, stepPipelineSetScenario, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stepPipelineStatus", nullptr, stepPipelineStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stepPipelineSetTargetBpm", nullptr, stepPipelineSetTargetBpm, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // 动态模式起步延迟校正窗口（秒）：窗口内 CHASE 不调速度，只平移 perfect 窗口
+        {"stepPipelineSetChaseDelayWindow", nullptr, stepPipelineSetChaseDelayWindow, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ★ 原生播放状态：加载中/就绪/失败 + 真实歌曲位置
         {"musicGetStatus", nullptr, musicGetStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
     };

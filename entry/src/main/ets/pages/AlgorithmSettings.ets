@@ -1,11 +1,16 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { SettingRow } from './Settings';
 import {
+  CHASE_DELAY_SEC_DEFAULT,
+  CHASE_DELAY_SEC_MAX,
+  CHASE_DELAY_SEC_MIN,
   SOURCE_SIM,
   STEP_SCENARIOS,
   StepScenario,
+  getChaseDelaySec,
   getStepScenario,
   getStepSource,
+  setChaseDelaySec,
   setStepScenario,
   setStepSource
 } from '../ets_libs/StepSource';
@@ -90,12 +95,15 @@ struct AlgorithmSettings {
   @State stepSource: number = SOURCE_SIM;
   /** 模拟场景下标（见 StepSource.STEP_SCENARIOS） */
   @State stepScenario: number = 0;
+  /** 动态模式起步延迟校正窗口（秒）；0 = 关闭 */
+  @State chaseDelaySec: number = CHASE_DELAY_SEC_DEFAULT;
   /** 步数检测源那个分段控件的轨道宽度（同样要等布局量出来） */
   @State trackWSource: number = 0;
 
   aboutToAppear(): void {
     this.stepSource = getStepSource();
     this.stepScenario = getStepScenario();
+    this.chaseDelaySec = getChaseDelaySec();
   }
 
   build() {
@@ -208,6 +216,42 @@ struct AlgorithmSettings {
         .width('100%')
 
       this.SourceSwitch()
+
+      // 动态模式「起步延迟校正」窗口：前 N 秒的 CHASE 只校正计步延迟，不改歌曲速度
+      Row({ space: 8 }) {
+        Text('起步校正时长')
+          .fontSize(13)
+          .fontColor(TEXT_SECONDARY)
+          .width(96)
+        Slider({
+          value: this.chaseDelaySec,
+          min: CHASE_DELAY_SEC_MIN,
+          max: CHASE_DELAY_SEC_MAX,
+          step: 5,
+          style: SliderStyle.OutSet
+        })
+          .layoutWeight(1)
+          .trackColor(FIELD_BG)
+          .selectedColor(ACCENT)
+          .blockColor(Color.White)
+          .onChange((value: number) => {
+            this.chaseDelaySec = Math.round(value);
+            setChaseDelaySec(this.chaseDelaySec);
+          })
+        Text(this.chaseDelaySec.toFixed(0) + ' 秒')
+          .fontSize(13)
+          .fontColor(TEXT_SECONDARY)
+          .width(52)
+          .textAlign(TextAlign.End)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Text('动态模式下，前 ' + this.chaseDelaySec.toFixed(0)
+        + ' 秒的追逐(CHASE)只做计步延迟校正（不改歌曲速度），过后才做正常相位调整。')
+        .fontSize(11)
+        .fontColor(TEXT_TERTIARY)
+        .width('100%')
 
       if (this.stepSource === SOURCE_SIM) {
         Text('模拟场景')

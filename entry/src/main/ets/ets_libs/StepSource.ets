@@ -50,3 +50,31 @@ export function getStepScenario(): number {
 export function setStepScenario(v: number): void {
   AppStorage.setOrCreate<number>(STEP_SCENARIO_KEY, v);
 }
+
+// ==================== 动态模式：起步延迟校正时长 ====================
+
+export const CHASE_DELAY_SEC_KEY: string = 'chaseDelayWindowSec';
+/** 默认 50 秒：前 50 秒的 CHASE 只校正计步延迟，不改歌曲速度 */
+export const CHASE_DELAY_SEC_DEFAULT: number = 50;
+export const CHASE_DELAY_SEC_MIN: number = 0;
+export const CHASE_DELAY_SEC_MAX: number = 300;
+
+/** 起步延迟校正窗口（秒）；0 = 关闭，全程用相位调整 */
+export function getChaseDelaySec(): number {
+  const v: number | undefined = AppStorage.get<number>(CHASE_DELAY_SEC_KEY);
+  if (v === undefined || v < CHASE_DELAY_SEC_MIN) {
+    return CHASE_DELAY_SEC_DEFAULT;
+  }
+  return v;
+}
+
+export function setChaseDelaySec(v: number): void {
+  let n: number = v;
+  if (n < CHASE_DELAY_SEC_MIN) {
+    n = CHASE_DELAY_SEC_MIN;
+  }
+  if (n > CHASE_DELAY_SEC_MAX) {
+    n = CHASE_DELAY_SEC_MAX;
+  }
+  AppStorage.setOrCreate<number>(CHASE_DELAY_SEC_KEY, n);
+}

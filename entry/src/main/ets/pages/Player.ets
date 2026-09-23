@@ -23,8 +23,13 @@ import {
   NativeAudio,
   NativePlayStatus
 } from '../ets_libs/NativeAudio';
-import { stepPipelineStart, stepPipelineStatus, stepPipelineStop } from 'libentry.so';
-import { SOURCE_SIM, STEP_SCENARIOS, getStepScenario, getStepSource } from '../ets_libs/StepSource';
+import {
+  stepPipelineSetChaseDelayWindow,
+  stepPipelineStart,
+  stepPipelineStatus,
+  stepPipelineStop
+} from 'libentry.so';
+import { SOURCE_SIM, STEP_SCENARIOS, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
 
 /**
  * 跑步电台 · 播放器页（可演示版）
@@ -1352,6 +1357,9 @@ struct Player {
       return;
     }
     try {
+      // 起步延迟校正窗口（算法参数设置里配的；0 = 关闭）：
+      // 窗口内 CHASE 只平移 perfect 窗口、不改歌曲速度，过后自动回到相位调整。
+      stepPipelineSetChaseDelayWindow(getChaseDelaySec());
       stepPipelineStart(this.stepScenario, this.songBpm, this.firstBeat, 0, 0.0);
       this.pipelineOn = true;
       this.pipelineCadence = 0;

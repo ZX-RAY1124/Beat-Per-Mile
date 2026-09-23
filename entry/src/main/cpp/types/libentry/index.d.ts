@@ -89,6 +89,13 @@ export const stepPipelineSetScenario: (scenario: number) => void;
 /** PRESET 模式：曲线推进 / 恒速滑条改动时更新规定目标步频 */
 export const stepPipelineSetTargetBpm: (bpm: number) => void;
 /**
+ * 动态模式「起步延迟校正」窗口（秒）。
+ * 窗口内 CHASE 走 TempoFollower 的 delayChase：不调歌曲速度，只把 perfect 窗口
+ * 平移去"框住"脚步（无听感变速）；窗口过后自动回到普通相位调整。
+ * 0 = 关闭。默认 50 秒。start 前后调用均可（reset 不会清掉它）。
+ */
+export const stepPipelineSetChaseDelayWindow: (sec: number) => void;
+/**
  * 返回 JSON 字符串：
  *   {running,cadenceSpm,multiplier,targetBpm,steps,followState,lastStepSec,songSec,
  *    mode,phaseOffset,delta,hasPlayer}

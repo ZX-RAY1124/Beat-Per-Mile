@@ -153,6 +153,20 @@ public:
         sim_ = s;
     }
 
+    /**
+     * 动态模式「起步延迟校正」窗口（秒）。
+     *
+     * 窗口内 CHASE 走 delayChase=true —— **不改歌曲速度**，只把 perfect 窗口平移去
+     * "框住"脚步（TempoFollower 已有的延迟调整模式，无听感变速）；窗口过后自动回到
+     * 普通相位调整。起步阶段计步延迟还没标定，先校正延迟比直接调相位/速度更稳。
+     *
+     * 0 = 关闭，全程用相位调整。默认 50 秒。
+     * ★ reset() 不清这个值（它是设置，不是运行时状态）；窗口按 wallSec() 从 0 重新计。
+     */
+    void setChaseDelayWindow(double sec) {
+        chaseDelayWindowSec_ = (sec > 0.0) ? sec : 0.0;
+    }
+
     /** 整条管线复位（保留歌曲设置） */
     void reset() {
         det_.reset();
@@ -173,6 +187,11 @@ public:
      * 内部会把 (当前时刻, 歌曲位置) 记进历史，供脚步回填。
      */
     void tick(double dtSec, double songPositionSec) {
+        // ★ 起步延迟校正窗口：必须在 det_.update() 之前设好 ——
+        //   脚步回调里就会用到 delayChase。窗口按 wallSec_（reset 后从 0 起）计。
+        follower_.delayChase =
+            (chaseDelayWindowSec_ > 0.0 && wallSec_ < chaseDelayWindowSec_);
+
         const gaitsim::GaitSample s = sim_.tick();
 
         // ★ 先记历史，再喂检测器：这样本 tick 的位置也能被本次脚步查到
@@ -280,6 +299,8 @@ private:
     bool                   havePrevStep_;
     double                 curSongSec_;
     double                 cadenceSpm_ = 0.0;
+    /** 起步延迟校正窗口（秒）；见 setChaseDelayWindow()。默认 50s */
+    double                 chaseDelayWindowSec_ = 50.0;
 
     // ---- 预设模式（开环 + PhaseTrim 微调）----
     int                    mode_;
