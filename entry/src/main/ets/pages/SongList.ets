@@ -1069,10 +1069,9 @@ async function analyzeSequentially(paths: string[],
 
 /** song_data.json 里的一段速度（与 index.d.ts 的 SongSegmentMeta 对齐） */
 interface SongDataSegment {
-  start: number;
+  start: number;   // 段落起始＝该段第一拍
   end: number;
   bpm: number;
-  firstbeat: number;
 }
 
 /** song_data.json 数组里的一个元素：一首歌 */

@@ -20,7 +20,8 @@
  *
  * song_data.json（放在 ctx.filesDir + '/Media/'）由协作者的 Essentia 管线产出：
  *   { "filename":"xxx.wav", "filedir":"...Media",
- *     "segments":[ { "start":0, "end":10, "bpm":120, "firstbeat":0 } ] }
+ *     "segments":[ { "start":0, "end":10, "bpm":120 } ] }
+ *   （旧版段里有 "firstbeat"，与 start 等价，读取时仍兼容）
  * v1 只用 segments[0]；segments 是给以后“一首歌多段落变速”留的。
  */
 import { common } from '@kit.AbilityKit';
@@ -68,10 +69,15 @@ const TAU_CADENCE: number = 1.2;
 const RUNNING_MIN_SPM: number = 40.0;
 
 export interface SongSegment {
+  /** 段落起始时间（秒）＝该段第一拍时间（原 firstbeat 与它等价） */
   start: number;
   end: number;
   bpm: number;
-  firstbeat: number;
+  /**
+   * @deprecated 与 start 等价（都是段落第一拍）。新数据不再写这个字段，
+   * 保留仅为兼容协作者 / 旧版 song_data.json，读取时作兜底。
+   */
+  firstbeat?: number;
 }
 
 export interface SongData {
@@ -320,7 +326,11 @@ export class RunDemoEngine {
     if (s0.bpm > 0) {
       this.songBpmV = s0.bpm;
     }
-    this.firstBeatV = s0.firstbeat;
+    // ★ firstbeat 已废弃：段落的 start 本来就是该段第一拍，两者数值相同。
+    //   新数据只写 start；旧文件/协作者文件可能只有 firstbeat，所以兜底读一下。
+    this.firstBeatV = (s0.start !== undefined)
+      ? s0.start
+      : ((s0.firstbeat !== undefined) ? s0.firstbeat : 0);
     let end: number = s0.end;
     for (let i = 0; i < song.segments.length; i++) {
       if (song.segments[i].end > end) {

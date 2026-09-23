@@ -783,21 +783,25 @@ static napi_value analyzeMusicAsync(napi_env env, napi_callback_info info) {
 
 
 // ════════════════════════════════════════════════════════════════════════
-//  analyzeSongSegments(path) —— CppDataAnalyzer 链路：节拍表 CSV → 多 BPM 段落
+//  analyzeSongSegments(path) —— CppDataAnalyzer 链路：节拍表 CSV → BPM 段落
 //
-//  为什么需要它：analyzeMusicAsync 回传的 BPM 是 Essentia 的**全局**估计值，
-//  跑步引擎需要的是"这一刻多少 BPM、接下来渐快还是渐慢"，那要 CppDataAnalyzer
-//  的段落结果。它读的正是 analyzeMusicAsync 刚写下的 <同名>_beats.csv，
-//  所以这里**不用重新解码/检测**，只是把同一份节拍表再拟合一次（毫秒级）。
+//  为什么需要它：analyzeMusicAsync 回传的 BPM 是 Essentia 的**全局**估计值；
+//  这里用 CppDataAnalyzer 对同一份节拍表再做一次抗混叠归一化 + 回归，得到更规整的 BPM。
+//  它读的正是 analyzeMusicAsync 刚写下的 <同名>_beats.csv，
+//  所以**不用重新解码/检测**，只是把同一份节拍表再拟合一次（毫秒级）。
+//
+//  ⚠️ 当前是**单段模式**（Options::multi_segment = false）：整首歌只输出一个平均 BPM。
+//     多段模式（每段独立 bpm_start + bpm_trend）留作后续升级。
 //
 //  ⚠️ 必须在 analyzeMusicAsync 成功之后调用 —— CSV 才会存在。
 //
 //  返回 JSON 字符串（ArkTS 侧 JSON.parse）：
 //    成功 {"ok":true,"filename":"x.wav","filedir":".../Media",
-//          "segments":[{"start":0.5,"end":162.15,"bpm":113.996,"firstbeat":0.5}, ...]}
+//          "segments":[{"start":0.5,"end":162.15,"bpm":113.996}, ...]}
 //    失败 {"ok":false,"filename":...,"filedir":...,"segments":[],"error":"..."}
-//  segments 刻意只留 song_data.json 约定的四个字段（trend/r2/rmse 不落盘），
-//  与协作者的格式保持一致；Player/RunDemoEngine 也是按 filename 找歌。
+//  segments 只留 start/end/bpm 三个字段（trend/r2/rmse 是拟合中间量，不落盘）。
+//  ⚠️ 不再输出 firstbeat：段落的 start 就是该段第一拍，两者数值相同，属于重复字段。
+//     RunDemoEngine 已改为读 start（并对旧文件里的 firstbeat 兜底），Player 按 filename 找歌。
 // ════════════════════════════════════════════════════════════════════════
 static napi_value analyzeSongSegments(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -822,7 +826,12 @@ static napi_value analyzeSongSegments(napi_env env, napi_callback_info info) {
             filedir  = dirNameOf(path);
             // analyzeMusicAsync 写 CSV 的路径规则：去掉扩展名 + "_beats.csv"（同名目录）
             const std::string csv = stripExtOf(path) + "_beats.csv";
-            r = cda::analyze_file(csv, cda::Options());
+            // ★ 当前用**单段模式**：整首歌只输出一个平均 BPM（抗混叠归一化照做）。
+            //   多段模式（每段独立 bpm_start + bpm_trend）是后续升级项 ——
+            //   把 multi_segment 置 true 即可，上层 JSON/落盘格式不用改。
+            cda::Options opt;
+            opt.multi_segment = false;
+            r = cda::analyze_file(csv, opt);
         }
     }
 
@@ -835,10 +844,10 @@ static napi_value analyzeSongSegments(napi_env env, napi_callback_info info) {
         for (size_t i = 0; i < r.paragraphs.size(); ++i) {
             if (i > 0) os << ',';
             const cda::Paragraph& p = r.paragraphs[i];
+            // 只写 start/end/bpm：段落的 start 就是该段第一拍，firstbeat 与它等价，已废弃
             os << "{\"start\":" << p.start
                << ",\"end\":" << p.end
-               << ",\"bpm\":" << p.bpm_start
-               << ",\"firstbeat\":" << p.start << "}";
+               << ",\"bpm\":" << p.bpm_start << "}";
         }
     }
     os << "]";

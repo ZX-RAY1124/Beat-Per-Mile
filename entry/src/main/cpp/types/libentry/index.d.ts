@@ -40,14 +40,12 @@ export const analyzeMusicAsync: (path: string,
   callback: (meta: SongMeta | null, err?: string) => void) => void;
 /** song_data.json 里的一个速度段落（CppDataAnalyzer 的输出） */
 export interface SongSegmentMeta {
-  /** 段落起始时间（秒） */
+  /** 段落起始时间（秒）＝该段第一拍时间（原 firstbeat 已废弃，两者等价） */
   start: number;
   /** 段落结束时间（秒） */
   end: number;
   /** 段落起始 BPM */
   bpm: number;
-  /** 段落第一拍时间（秒），播放器算拍相位用 */
-  firstbeat: number;
 }
 /** analyzeSongSegments() 返回的 JSON 结构 */
 export interface SongSegmentsMeta {
