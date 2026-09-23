@@ -1296,7 +1296,7 @@ struct CurveEdit {
   /** 返回时弹：保存还是丢弃 */
   private askSaveOnExit(): void {
     this.getUIContext().showAlertDialog({
-      title: '还没保存',
+      title: '退出',
       message: '退出前要保存这条曲线吗？',
       autoCancel: true, //点空白处关掉弹窗＝留在本页
       primaryButton: {

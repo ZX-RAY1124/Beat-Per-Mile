@@ -1,8 +1,10 @@
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { picker } from '@kit.CoreFileKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { SongJSON, SongListJSON, selection, saveAt, totalSongList, SongJSON_ROW, bumpRevision } from '../ets_libs/PlayListStore';
+import { SongJSON, SongListJSON, selection, saveAt, totalSongList, SongJSON_ROW, bumpRevision,
+         removeSongFromAllPlaylists } from '../ets_libs/PlayListStore';
 import { common } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import call from '@ohos.telephony.call';
 import { loadAll } from '../ets_libs/CurveStore';
 import {analyzeMusicAsync, getAnalyseStatus, analyzeSongSegments, SongMeta} from 'libentry.so';
@@ -33,17 +35,22 @@ class SongData {
   /** 时长，形如 '3:42'；暂时没有这个数据，留空时显示占位符 */
   duration: string;
   type:selection;
-  /** 音频文件名（含扩展名）：歌单的稳定 id（见 PlayListStore.SongJSON.filename） */
+  /**
+   * 音频文件名（含扩展名），Media 目录内的实际文件名。
+   * ★ 删除歌曲时要靠它定位「音频本体 + <同名>_beats.csv」。
+   *   不能拿 title 反推：重名导入会存成 xxx-1.wav，而 title 是容器标签。
+   *   旧数据可能没有，故为空串时删除会跳过文件清理（但 json 记录照删）。
+   */
   filename: string;
 
   constructor(title: string, artist: string, bpm: number, duration: string = '',
-              type_: selection = selection.OFFLINE, filename_: string = '') {
+              type_: selection = selection.OFFLINE, filename: string = '') {
     this.title = title;
     this.artist = artist;
     this.bpm = bpm;
     this.duration = duration;
     this.type = type_;    //要改,测试用
-    this.filename = filename_;
+    this.filename = filename;
   }
 }
 
@@ -201,6 +208,17 @@ export struct SongList {
   COLOR_PLAN = 0;
   G_INDEX = 0;
 
+  /** 导入/分析进行中：true 时挡住返回，并显示不可取消的进度弹窗 */
+  @State importing: boolean = false;
+  /** 进度弹窗文案（"正在分析 2/5：xxx" / "解码音频 40%"） */
+  @State importText: string = '';
+  /** openCustomDialog 返回的弹窗 id，用于关闭；undefined = 当前没有弹窗 */
+  private importDialogId: number | undefined = undefined;
+  /** openCustomDialog 的 Promise 本体：它异步给出 id，关闭前要等它就绪，避免竞态 */
+  private importDialogOpening: Promise<number> | undefined = undefined;
+
+  @State listVision:number = 0;
+
 
   build() {
     HdsNavDestination() {
@@ -218,8 +236,16 @@ export struct SongList {
                   this.toggle(index);
                 }
               })
-            }
-          }, (song: SongData) => song.title)
+            }.swipeAction({
+              // ★ end = 从右往左滑（左滑）露出的操作区
+              //   点「删除」→ 二次确认 → 清 song_data.json / 音频+beats csv / Songs.json
+              end: {
+                builder: () => {
+                  this.DeleteActionBuilder(index);
+                }
+              }
+            })
+          }, (song: SongData) => song.title+ '#' + this.listVision.toString())
         }
         .width('100%')
         .height('100%')
@@ -280,28 +306,7 @@ export struct SongList {
               componentId: "menu_1",
               isEnabled:true,
               action: () => {
-                importFromPicker(this.getUIContext().getHostContext() as common.UIAbilityContext)
-                  .then((paths: string[]) => {
-                    if (paths.length === 0) {
-                      console.error('未导入任何文件，跳过分析');
-                      return;
-                    }
-                    console.info(`导入 ${paths.length} 首，开始逐首分析…`);
-                    // 逐首串行分析：native 的进度状态是单例，并行会互相覆盖
-                    analyzeSequentially(paths, (meta: SongMeta, path: string) => {
-                      const fileName: string = path.substring(path.lastIndexOf('/') + 1);
-                      // ① songs.json：歌曲列表展示要的元数据（BPM 是 Essentia 的全局值）
-                      //    同时记下音频文件名 —— 歌单存的就是它（稳定 id）
-                      this.add_music(meta.name, meta.BPM, meta.author, meta.time,
-                        selection.OFFLINE, fileName);
-                      // ② song_data.json：CppDataAnalyzer 的详细多段 BPM（预览播放器用）
-                      //    必须在 analyzeMusicAsync 成功之后 —— native 要读刚写下的 _beats.csv
-                      this.add_song_data(path);
-                    }).then(() => {
-                      // 全部落库完成后再重读一次，保证界面看到完整列表
-                      this.reload_SongList();
-                    });
-                  })
+                this.runImportFlow();
               }
             }, badge: {}
           },
@@ -452,18 +457,11 @@ export struct SongList {
 
   private loadPlayList(songList: SongJSON[]){
     songList.forEach((item) => {
-      // 优先按 filename 匹配（稳定 id，不随歌名/库顺序变）；
-      // 老数据没有 filename 时才退回按歌名匹配。
-      const wantFile: string = item.filename !== undefined ? item.filename : '';
-      let hit: number = -1;
-      for (let i = 0; i < SONGS.length; i++) {
-        if (wantFile.length > 0) {
-          if (SONGS[i].filename === wantFile) { hit = i; break; }
-        } else if (SONGS[i].title === item.name) { hit = i; break; }
-      }
-      if (hit >= 0) {
-        this.toggle(hit);
-      }
+      SONGS.forEach((song_item) => {
+        if(item.name === song_item.title){
+          this.toggle(SONGS.indexOf(song_item));
+        }
+      })
     })
   }
 
@@ -478,7 +476,8 @@ export struct SongList {
         time: SONGS[item].duration ? SONGS[item].duration : '',
         BPM: SONGS[item].bpm ? SONGS[item].bpm : 0,
         type: SONGS[item].type,
-        filename: SONGS[item].filename,   // 稳定 id：播放器拿它去 song_data.json 找数据
+        // 文件名必须一起带走，否则存进歌单后删歌就找不到文件了
+        filename: SONGS[item].filename,
       }
       callback.songList.push(SONG_item);
     })
@@ -487,6 +486,16 @@ export struct SongList {
   }
 
   private showBackDialog(): void {
+    // ★ 导入/分析进行中：绝对不允许离开本页。
+    //   此时正确做法是"什么都不做"—— 弹窗本身不可取消，也不该再叠一个退出确认框。
+    if (this.importing) {
+      console.info('[import] 正在导入/分析，暂时不能离开本页');
+      this.getUIContext().getPromptAction().showToast({
+        message: '正在导入歌曲，请稍候…',
+        duration: 1500
+      });
+      return;
+    }
     this.getUIContext().showAlertDialog({
       title: '确认保存',
       message: `歌单名称:${this.SONG_LIST_NAME},歌曲数:${this.selectedIndexes.length}`,
@@ -526,6 +535,187 @@ export struct SongList {
         }
       }
     })
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  //  导入进度弹窗（不可取消）
+  //
+  //  需求：从本地导入后，在落库全部完成之前不允许用户离开 SongList 页。
+  //  三道锁：
+  //    ① 弹窗 autoCancel = false  —— 点遮罩不关
+  //    ② onBackPressed 里判 importing —— 系统返回键/侧滑退不出去
+  //    ③ 弹窗里【没有】任何取消按钮 —— 没有可点的关闭入口
+  //  分析跑完由代码调 closeImportDialog() 关闭，然后 importing 立刻转 false。
+  //
+  //  沿用工程既有写法（CurveList.ets 的 show_BPM_setting / close_BPM_setting）：
+  //  promptAction.openCustomDialog 拿 dialogId，closeCustomDialog(id) 关闭。
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * 导入主流程。用 async/await 而不是 then 链，是为了让 finally 明确地
+   * 覆盖"取消 / 异常 / 正常完成"三种出口 —— 否则一旦漏掉某条路径，
+   * 弹窗不关 + importing 不复位，用户就被永久困在本页了。
+   *
+   * ★ 弹窗必须在 picker **返回之后**才打开，不能提前到 picker 之前：
+   *   提前打开时，系统 picker 是被拉起的另一个窗口，会把刚创建的 dialog
+   *   顶掉/抢占焦点，用户从头到尾都看不到它。
+   *   （实测现象：返回键和侧滑都被挡住了 —— 说明 importing 确实生效了 ——
+   *     但界面上一直没有弹窗。）
+   *   所以顺序是：先上锁 importing（此时返回已被拦）→ 选文件 → 再弹窗 → 分析。
+   */
+  private async runImportFlow(): Promise<void> {
+    // ★ 先上锁：从拉起 picker 之前就防住"半路退出"。
+    //   这段时间界面没有弹窗（用户正在系统选择器里选文件），
+    //   但 importing 已经为 true，返回键/侧滑同样被拦。
+    this.importing = true;
+    this.importText = '正在导入歌曲…';
+
+    let done: number = 0;
+    try {
+      const paths: string[] = await importFromPicker(
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      if (paths.length === 0) {
+        console.error('[import] 未导入任何文件，跳过分析');
+        return;                       // finally 会负责解锁
+      }
+
+      // ── 选完文件、开始分析前才弹窗：此时不会有别的窗口来抢焦点 ──
+      console.info(`[import] 导入 ${paths.length} 首，开始逐首分析…`);
+      this.importText = `已导入 ${paths.length} 首，准备分析…`;
+      this.openImportDialog();
+
+      // 逐首串行分析：native 的进度状态是单例，并行会互相覆盖
+      await analyzeSequentially(paths,
+        (meta: SongMeta, path: string) => {
+          // ★ 从沙箱路径取出音频文件名，随 songs.json 一起落库 —— 删除时靠它定位文件
+          const audioName: string = path.substring(path.lastIndexOf('/') + 1);
+          // ① songs.json：歌曲列表展示要的元数据（BPM 是 Essentia 的全局值）
+          this.add_music(meta.name, meta.BPM, meta.author, meta.time, selection.OFFLINE, audioName);
+          // ② song_data.json：CppDataAnalyzer 的详细多段 BPM（预览播放器用）
+          //    必须在 analyzeMusicAsync 成功之后 —— native 要读刚写下的 _beats.csv
+          this.add_song_data(path);
+          done++;
+        },
+        (idx: number, total: number, name: string, phase: string) => {
+          this.importText = (phase.length > 0)
+            ? `正在分析 ${idx}/${total}：${name}\n${phase}`
+            : `正在分析 ${idx}/${total}：${name}`;
+        });
+
+      // 全部落库完成后再重读一次，保证界面看到完整列表
+      this.reload_SongList();
+      this.importText = `已完成 ${done} 首，即将刷新列表…`;
+    } catch (e) {
+      console.error(`[import] 导入流程异常: ${err2str(e)}`);
+    } finally {
+      // 无论成功、失败、还是用户取消，都必须走到这里
+      await this.closeImportDialog(done);
+    }
+  }
+
+  /**
+   * 进度弹窗内容。
+   * ⚠️ 颜色一律用字面量，不要用 $r('sys.color.xxx')：
+   *    工程里验证过能用的只有 font_primary；font_secondary / font_tertiary /
+   *    background_primary 这几个我没能核实到，写错会静默失效（不报错、但不显示）。
+   */
+  @Builder
+  ImportProgressBuilder() {
+    Column() {
+      Text('正在导入歌曲')
+        .fontSize($r('sys.float.Title_M'))
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('sys.color.font_primary'))
+        .padding({ top: 24, bottom: 14 })
+
+      LoadingProgress()
+        .width(48)
+        .height(48)
+        .color('#FF6B6B')
+
+      Text(this.importText.length > 0 ? this.importText : '准备中…')
+        .fontSize(14)
+        .fontColor('#666666')
+        .maxLines(3)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.Center)
+        .padding({ top: 14, bottom: 10 })
+        .width('86%')
+
+      Text('分析期间请勿退出本页面')
+        .fontSize(12)
+        .fontColor('#999999')
+        .padding({ bottom: 24 })
+    }
+    .width('80%')
+    .backgroundColor('#FFFFFF')
+    .borderRadius(16)
+  }
+
+  private openImportDialog(): void {
+    try {
+      this.importDialogOpening = this.getUIContext().getPromptAction().openCustomDialog({
+        builder: () => {
+          this.ImportProgressBuilder();
+        },
+        autoCancel: false          // ★ 点遮罩不关
+      });
+      this.importDialogOpening.then((dialogId: number) => {
+        this.importDialogId = dialogId;
+        console.info(`[import] 进度弹窗已打开 id=${dialogId}`);
+      }).catch((error: BusinessError) => {
+        console.error(`[import] 打开进度弹窗失败: ${JSON.stringify(error)}`);
+      });
+    } catch (error) {
+      console.error(`[import] openCustomDialog 异常: ${JSON.stringify(error)}`);
+    }
+  }
+
+  /**
+   * 关闭进度弹窗并解锁。
+   *
+   * 这里 await 打开时存下的 promise：openCustomDialog 是异步返回 id 的，
+   * 如果分析很快结束（或用户很快取消），关闭调用可能**早于** id 赋值，
+   * 那样 importDialogId 还是 undefined，弹窗就永远关不掉、人被困住。
+   *
+   * @param done 成功落库的歌曲数；> 0 时再弹一个完成提示
+   */
+  private async closeImportDialog(done: number): Promise<void> {
+    if (this.importDialogOpening !== undefined) {
+      let dialogId: number | undefined = this.importDialogId;
+      if (dialogId === undefined) {
+        try {
+          dialogId = await this.importDialogOpening;   // 等 id 就绪
+        } catch (e) {
+          console.error(`[import] 等待弹窗 id 失败: ${err2str(e)}`);
+        }
+      }
+      if (dialogId !== undefined) {
+        try {
+          this.getUIContext().getPromptAction().closeCustomDialog(dialogId);
+        } catch (error) {
+          console.error(`[import] 关闭进度弹窗失败: ${JSON.stringify(error)}`);
+        }
+      }
+      this.importDialogId = undefined;
+      this.importDialogOpening = undefined;
+    }
+    // ★ 顺序要紧：先真正关掉弹窗，最后才解锁 importing。
+    //   反过来的话（先解锁）会出现"弹窗还在、但返回已经不拦"的窗口期。
+    this.importing = false;
+
+    if (done > 0) {
+      this.getUIContext().showAlertDialog({
+        title: '导入完成',
+        message: `已成功导入 ${done} 首歌曲`,
+        autoCancel: true,
+        confirm: {
+          value: '知道了',
+          action: () => {
+          }
+        }
+      });
+    }
   }
 
 
@@ -598,8 +788,8 @@ export struct SongList {
 
 
 
-  private add_music(name_: string, BPM_: number, author_: string, time_:string,
-                    type_: selection, filename_: string){
+  private add_music(name_: string, BPM_: number, author_: string, time_:string,type_: selection,
+                    filename_: string = ''){
     let rawData : SongJSON_ROW = {
       name: name_,
       BPM: BPM_,
@@ -615,7 +805,8 @@ export struct SongList {
       author: rawData.author ? author_ : "Unkown Artist",
       time: rawData.time ? time_ : "00:00",
       type: type_,
-      filename: filename_     // 歌单/播放器都靠它找音频与 song_data.json
+      // ★ 存下真实文件名，删除时才找得到「音频 + 同名 _beats.csv」
+      filename: filename_
     }
 
     const ctx: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -657,15 +848,159 @@ export struct SongList {
         songList = JSON.parse(file) as totalSongList;
       }
       songList.songList.forEach((item: SongJSON) => {
+        // 旧数据可能没有 filename 字段（undefined），这里统一成空串
+        const fn: string = (item.filename !== undefined && item.filename !== null)
+          ? item.filename : '';
         SONGS.push(
-          new SongData(item.name, item.author, item.BPM, item.time, item.type,
-            item.filename !== undefined ? item.filename : ''),
+          new SongData(item.name, item.author, item.BPM, item.time, item.type, fn),
         )
+        this.listVision += 1;
       })
     } catch (e){
       console.error(`Face Error in load music List: ${e}`)
     }
   }
+
+  /**
+   * 删除一首歌的全部痕迹。四步都要做，缺一不可：
+   *   ① song_data.json 里 filename 匹配的那条（预览播放器读的那份）
+   *   ② Media 目录下的音频本体 + 同名 <stem>_beats.csv
+   *   ③ Songs.json 里的展示记录（曲库）
+   *   ④ 所有已保存歌单（SongList/*.json）里的副本
+   *
+   * ★ 匹配统一以 **filename 为稳定 id**（①③④ 都是 filename 优先、name 兜底），
+   *   只有 early 数据缺 filename 时才退回按 name —— 三处用同一把尺子，
+   *   避免"某个文件删掉了、另一个还留着"的割裂状态。
+   *
+   * 顺序说明：先删外部文件、最后删 Songs.json 主记录 —— 万一中间失败，
+   * 列表里那首歌还在，用户能重试；反过来先删主记录就会出现"列表没了、
+   * 文件还占着空间"的孤儿文件。
+   *
+   * @param filename 音频文件名（含扩展名）；为空时跳过 ②（旧数据没这个字段）
+   * @param name     展示名，仅在 filename 缺失时作为兜底键
+   * @return ①③ 是否都成功
+   */
+  private removeSong(filename: string, name: string): boolean {
+    const ctx: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const mediaDir: string = ctx.filesDir + '/Media';
+
+    // ── ① song_data.json ──
+    const sdRemoved: boolean = removeSongData(ctx, filename, name);
+
+    // ── ② 音频本体 + 同名 _beats.csv ──
+    //   用 unlinkSync 而不是 removeSync：后者在 @ohos.file.fs 的文档里我没能核实到，
+    //   而 unlinkSync 是本工程 PlayListStore/CurveStore 已在用的接口（见 deleteAt）。
+    //   注意 unlinkSync 在目标不存在时会抛，所以必须先 accessSync 判存在。
+    if (filename.length > 0) {
+      const audioPath: string = mediaDir + '/' + filename;
+      safeUnlink(audioPath, '音频');
+      // beats csv 的命名规则与 native 一致：<音频去扩展名>_beats.csv
+      const dot: number = filename.lastIndexOf('.');
+      const stem: string = (dot > 0) ? filename.substring(0, dot) : filename;
+      safeUnlink(mediaDir + '/' + stem + '_beats.csv', '拍点表');
+    } else {
+      // 旧数据没有 filename：拿 title 配上常见扩展名试着找找，找不到就算了（不报错）
+      console.info('[delete] 无 filename（旧数据），尝试按标题匹配音频文件');
+      const exts: string[] = ['.wav', '.m4a', '.mp3', '.flac', '.aac', '.ogg'];
+      for (let i = 0; i < exts.length; i++) {
+        const cand: string = mediaDir + '/' + name + exts[i];
+        if (fs.accessSync(cand)) {
+          safeUnlink(cand, '音频(按标题匹配)');
+          safeUnlink(mediaDir + '/' + name + '_beats.csv', '拍点表(按标题匹配)');
+          break;
+        }
+      }
+    }
+
+    // ── ③ Songs.json（曲库展示记录）──
+    //   与 ①② 用同一把尺子：filename 优先，老数据才退回按 name
+    const songsRemoved: boolean = removeFromSongsJson(ctx, filename, name);
+
+    // ── ④ 所有已保存的歌单里也要剔除这首歌 ──
+    //   歌单 json 各自存了 songList 副本，不清理就会残留一条指向已删文件的
+    //   filename —— 播放器按 filename 去 song_data.json / Media 找必然落空。
+    const plTouched: number = removeSongFromAllPlaylists(ctx, filename, name);
+    if (plTouched > 0) {
+      console.info(`[delete] 已从 ${plTouched} 个歌单中移除该曲目`);
+    }
+
+    if (songsRemoved || plTouched > 0) {
+      bumpRevision();   // 通知监听方重读
+    }
+    return sdRemoved && songsRemoved;
+  }
+
+  /** 侧滑露出的删除按钮 */
+  @Builder
+  DeleteActionBuilder(index: number) {
+    Button('删除')
+      .type(ButtonType.Normal)
+      .width(72)
+      .height('100%')
+      .fontSize(15)
+      .fontColor(Color.White)
+      .backgroundColor('#E84026')
+      .borderRadius(0)
+      .onClick(() => {
+        this.confirmDelete(index);
+      })
+  }
+
+  /** 删除前确认（破坏性操作，必须二次确认） */
+  private confirmDelete(index: number): void {
+    if (index < 0 || index >= SONGS.length) {
+      console.error(`[delete] 下标越界: ${index}`);
+      return;
+    }
+    const song: SongData = SONGS[index];
+    this.getUIContext().showAlertDialog({
+      title: '删除歌曲',
+      message: `确定删除「${song.title}」吗？\n音频文件与拍点数据都会一并删除，且不可恢复。`,
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        action: () => {
+          this.doDelete(index);
+        }
+      }
+    });
+  }
+
+  private doDelete(index: number): void {
+    if (index < 0 || index >= SONGS.length) {
+      console.error(`[delete] 下标越界: ${index}`);
+      return;
+    }
+    const song: SongData = SONGS[index];
+    const ok: boolean = this.removeSong(song.filename, song.title);
+
+    // 播放列表里选中的是 SONGS 的下标；删掉一项后，比它大的下标都要前移一位，
+    // 否则 selectedIndexes 会指向隔壁那首歌（甚至越界）。
+    const next: number[] = [];
+    for (let i = 0; i < this.selectedIndexes.length; i++) {
+      const s: number = this.selectedIndexes[i];
+      if (s < index) {
+        next.push(s);
+      } else if (s > index) {
+        next.push(s - 1);
+      }
+      // s === index 的那项直接丢掉
+    }
+    this.selectedIndexes = next;
+
+    this.reload_SongList();
+    this.getUIContext().getPromptAction().showToast({
+      message: ok ? `已删除「${song.title}」` : `「${song.title}」删除可能不完整，请检查日志`,
+      duration: 2000
+    });
+  }
+
 
   /**
    * 详细 BPM 落库：调 native 的 CppDataAnalyzer 链路，把多段 BPM 并入 song_data.json。
@@ -761,8 +1096,11 @@ function phaseText(phase: string): string {
  * ⚠️ 调用方必须在 analyzeMusicAsync 的回调里 clearInterval（见调用处），
  *    否则 done/failed 之后它会一直空转。本函数在检测到终态时也会自行停掉，
  *    属于双保险。
+ *
+ * @param onPhase 可选：阶段文案变化时回调一次（"解码音频 40%"、"节拍分析"…），
+ *                用于刷新进度弹窗。不传就只打日志。
  */
-function startAnalyseProgress(): number {
+function startAnalyseProgress(onPhase?: (phase: string) => void): number {
   let lastLine: string = '';
   const timer = setInterval(() => {
     let st: AnalyseStatus;
@@ -772,12 +1110,14 @@ function startAnalyseProgress(): number {
       return;
     }
     // pct >= 0 才显示百分比；未知时只显示阶段
-    const line: string = `[进度] ${phaseText(st.phase)}` +
-      (st.pct >= 0 ? ` ${st.pct}%` : '') +
-      `  已耗时 ${(st.elapsedMs / 1000).toFixed(1)}s`;
+    const head: string = phaseText(st.phase) + (st.pct >= 0 ? ` ${st.pct}%` : '');
+    const line: string = `[进度] ${head}  已耗时 ${(st.elapsedMs / 1000).toFixed(1)}s`;
     if (line !== lastLine) {
       lastLine = line;
       console.info(line);
+      if (onPhase !== undefined && st.running) {
+        onPhase(head);       // 只在变化时回调，避免每 500ms 都 setState
+      }
     }
     if (!st.running) {
       clearInterval(timer);
@@ -1047,10 +1387,14 @@ async function importFromPicker(context: common.Context): Promise<string[]> {
  * （getAnalyseStatus 的 phase/pct），并发跑多首会互相覆盖；
  * 而且 Essentia 的 multifeature 本身很吃 CPU，并发只会更慢。
  *
- * @param onResult 每首分析完成（成功才回调 meta）时通知上层，用于落库
+ * @param onResult   每首分析完成（成功才回调 meta）时通知上层，用于落库
+ * @param onProgress 进度回调（第 idx 首 / 共 total 首 / 文件名 / 阶段文案）。
+ *                   阶段文案为空串表示"刚开始这一首"。
  */
 async function analyzeSequentially(paths: string[],
-                                   onResult: (meta: SongMeta, path: string) => void): Promise<void> {
+                                   onResult: (meta: SongMeta, path: string) => void,
+                                   onProgress: (idx: number, total: number,
+                                                name: string, phase: string) => void): Promise<void> {
   const total: number = paths.length;
   for (let i = 0; i < total; i++) {
     const p: string = paths[i];
@@ -1058,7 +1402,11 @@ async function analyzeSequentially(paths: string[],
     if (total > 1) {
       console.info(`[import] —— 分析 ${i + 1}/${total}: ${name} ——`);
     }
-    const progressTimer: number = startAnalyseProgress();
+    onProgress(i + 1, total, name, '');
+    const progressTimer: number = startAnalyseProgress((phase: string) => {
+      // 把 native 的阶段（解码 40% / 节拍分析 …）透传给弹窗
+      onProgress(i + 1, total, name, phase);
+    });
     await new Promise<void>((resolve: () => void) => {
       analyzeMusicAsync(p, (meta: SongMeta | null, err?: string) => {
         clearInterval(progressTimer);
@@ -1178,6 +1526,179 @@ function mergeSongData(ctx: common.UIAbilityContext, entry: SongDataEntry): bool
     return true;
   } catch (e) {
     console.error(`[song_data] 写入失败: ${err2str(e)}`);
+    return false;
+  }
+}
+
+/**
+ * 删除一个文件；不存在就静默跳过。
+ *
+ * ⚠️ 必须自己先 accessSync 判存在：unlinkSync 对不存在的路径会抛异常，
+ *    而"拍点表本来就没生成过"是完全正常的情况（分析失败/素材太短），
+ *    不该因此让整个删除流程报错。
+ *
+ * @param what 日志里的称呼（"音频" / "拍点表"）
+ */
+function safeUnlink(path: string, what: string): void {
+  if (!fs.accessSync(path)) {
+    console.info(`[delete] ${what}不存在，跳过: ${path}`);
+    return;
+  }
+  try {
+    fs.unlinkSync(path);
+    console.info(`[delete] 已删除${what}: ${path}`);
+  } catch (e) {
+    console.error(`[delete] 删除${what}失败 ${path}: ${err2str(e)}`);
+  }
+}
+
+/**
+ * 从 song_data.json 里删掉一首歌。
+ *
+ * 优先按 filename 精确匹配（这是该文件的既有主键）；
+ * filename 为空（旧数据）时退回**基名相等**匹配：把条目的 filename 去扩展名，
+ * 和展示名比 —— 能覆盖"导入时用文件名当标题"的常见情形。
+ *
+ * @return true = 确实删掉了一条；false = 没找到或写回失败（都不该阻断后续删除）
+ */
+function removeSongData(ctx: common.UIAbilityContext, filename: string, name: string): boolean {
+  const path: string = songDataFilePath(ctx);
+  if (!fs.accessSync(path)) {
+    return false;         // 还没有这份文件，视为"无数据可删"
+  }
+
+  let list: SongDataEntry[] = [];
+  try {
+    const text: string = fs.readTextSync(path);
+    if (text.length > 0) {
+      const asList: SongDataEntry[] = JSON.parse(text) as SongDataEntry[];
+      if (Array.isArray(asList)) {
+        list = asList;
+      } else {
+        const asObj: SongDataEntry = JSON.parse(text) as SongDataEntry;
+        if (asObj !== undefined && asObj !== null) {
+          list = [asObj];
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`[delete] song_data.json 解析失败，跳过: ${err2str(e)}`);
+    return false;
+  }
+
+  const next: SongDataEntry[] = [];
+  let removed: boolean = false;
+  for (let i = 0; i < list.length; i++) {
+    const cur: SongDataEntry = list[i];
+    if (cur === undefined || cur === null) {
+      continue;
+    }
+    let match: boolean = false;
+    if (filename.length > 0 && cur.filename === filename) {
+      match = true;
+    } else if (filename.length === 0 && name.length > 0 && cur.filename !== undefined) {
+      const dot: number = cur.filename.lastIndexOf('.');
+      const stem: string = (dot > 0) ? cur.filename.substring(0, dot) : cur.filename;
+      match = (stem === name);
+    }
+    if (match) {
+      removed = true;
+      continue;            // 丢掉这一条
+    }
+    next.push(cur);
+  }
+
+  if (!removed) {
+    console.info(`[delete] song_data.json 中没有匹配项: filename=${filename} name=${name}`);
+    return false;
+  }
+
+  try {
+    const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+    fs.truncateSync(path, 0);              // writeSync 不截断，必须先清空
+    fs.writeSync(f.fd, JSON.stringify(next));
+    fs.closeSync(f);
+    console.info(`[delete] song_data.json 已移除 1 条，剩余 ${next.length} 条`);
+    return true;
+  } catch (e) {
+    console.error(`[delete] song_data.json 写回失败: ${err2str(e)}`);
+    return false;
+  }
+}
+
+/**
+ * 从 Media/Songs.json（歌曲列表的展示记录）里删掉一首歌。
+ *
+ * 匹配规则与另外两处（song_data.json / 各歌单 json）**完全一致**：
+ *   ① filename 非空 → 按 filename 精确匹配（稳定 id）
+ *   ② filename 为空（早期数据没写这个字段）→ 退回按 name 匹配
+ *
+ * 为什么改成 filename 优先：filename 才是真正唯一的键。
+ * 按 name 删会把**所有同名歌曲**一起删掉（同一首歌可能以
+ * LostMemory.m4a / LostMemory-1.m4a 存在两份，name 却相同），
+ * 而按 filename 只删点中的那一条。
+ *
+ * @param filename 音频文件名（含扩展名），可为空串
+ * @param name     展示名，作为 filename 缺失时的兜底
+ * @return true = 确实删掉了一条
+ */
+function removeFromSongsJson(ctx: common.UIAbilityContext, filename: string,
+                             name: string): boolean {
+  const path: string = ctx.filesDir + '/Media/Songs.json';
+  if (!fs.accessSync(path)) {
+    return false;
+  }
+
+  let list: SongJSON[] = [];
+  try {
+    const text: string = fs.readTextSync(path);
+    if (text.length > 0) {
+      const parsed: totalSongList = JSON.parse(text) as totalSongList;
+      if (parsed !== undefined && parsed !== null && parsed.songList !== undefined) {
+        list = parsed.songList;
+      }
+    }
+  } catch (e) {
+    console.error(`[delete] Songs.json 解析失败，跳过: ${err2str(e)}`);
+    return false;
+  }
+
+  const next: SongJSON[] = [];
+  let removed: boolean = false;
+  for (let i = 0; i < list.length; i++) {
+    const cur: SongJSON = list[i];
+    if (cur === undefined || cur === null) {
+      continue;
+    }
+    const curFn: string = (cur.filename !== undefined && cur.filename !== null)
+      ? cur.filename : '';
+    let match: boolean = false;
+    if (filename.length > 0) {
+      match = (curFn === filename);          // ① 精确：只删点中的那一条
+    } else {
+      match = (cur.name === name);           // ② 兜底：老数据没有 filename
+    }
+    if (match) {
+      removed = true;
+      continue;                              // 丢掉这一条
+    }
+    next.push(cur);
+  }
+  if (!removed) {
+    console.info(`[delete] Songs.json 中没有匹配项: filename=${filename} name=${name}`);
+    return false;
+  }
+
+  try {
+    const body: totalSongList = { songList: next };
+    const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+    fs.truncateSync(path, 0);              // 同上：必须先截断
+    fs.writeSync(f.fd, JSON.stringify(body));
+    fs.closeSync(f);
+    console.info(`[delete] Songs.json 已移除 1 条，剩余 ${next.length} 条`);
+    return true;
+  } catch (e) {
+    console.error(`[delete] Songs.json 写回失败: ${err2str(e)}`);
     return false;
   }
 }
