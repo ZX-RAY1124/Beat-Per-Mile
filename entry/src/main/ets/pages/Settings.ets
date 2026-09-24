@@ -229,6 +229,17 @@ export struct Settings {
             })
             this.RowDivider()
             SettingRow({
+              icon: $r('sys.symbol.play_circle'),
+              iconColor: COLOR_RED,
+              iconBg: ICON_BG_RED,
+              label: '预览播放器（测试）',
+              onTap: () => {
+                // 正式播放器已挪到主页两个圆；这里保留预览页做回归测试
+                this.navPathStack.pushPathByName('Player_Page', null, true);
+              }
+            })
+            this.RowDivider()
+            SettingRow({
               icon: $r('sys.symbol.info_circle'),
               iconColor: COLOR_ORANGE,
               iconBg: ICON_BG_ORANGE,

@@ -18,6 +18,8 @@ import * as entry from 'libentry.so';
 import { CurveList } from './CurveList';
 import { Settings } from './Settings';
 import { Playlist } from './Playlist';
+import { MODE_CONSTANT, MODE_DYNAMIC } from '../ets_libs/RunDemoEngine';
+import { MainPlayerParam } from '../ets_libs/PlayerRouteParam';
 
 console.log('模块对象='+JSON.stringify(entry));
 console.log('模块对象是否为undefined = ' + (entry === undefined));
@@ -410,7 +412,9 @@ struct Main {
                       this.Button_1.select();
                       this.Button_2.unselect();
                     }
-                    this.navPathStack.pushPathByName("Main_Play_Page",this.windowWidth,() => {
+                    // 红圆 = 动态模式
+                    const param: MainPlayerParam = { mode: MODE_DYNAMIC, width: this.windowWidth };
+                    this.navPathStack.pushPathByName("Main_Play_Page", param, () => {
                       this.Button_1.unselect();
                     }, true);
 
@@ -438,7 +442,10 @@ struct Main {
 
 
                 }
-                .backgroundColor(Color.Green)
+                .linearGradient({        // 与红圆同款渐变：纯色太平，加一层同角度渐变才有和红圆一样的体积感
+                  angle: 145,
+                  colors: [['#4ECDC4', 0.0], ['#22A06B', 1.0]]
+                })
                 .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
                 .height(240)
                 .width(240)
@@ -447,7 +454,23 @@ struct Main {
                 .renderGroup(true)
                 .onClick(() => {
 
-                  this.navPathStack.pushPathByName("Player_Page",null);
+                  this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {
+                    this.Button_selected_id = 2;
+
+                    if (this.Button_2.is_select) {
+                      this.Button_2.unselect();
+                      this.Button_1.unselect();
+                    } else {
+                      this.Button_2.select();
+                      this.Button_1.unselect();
+                    }
+
+                    // 绿圆 = 预设模式；MainPlayer 内部再决定走曲线还是恒速
+                    const param: MainPlayerParam = { mode: MODE_CONSTANT, width: this.windowWidth };
+                    this.navPathStack.pushPathByName("Main_Play_Page", param, () => {
+                      this.Button_2.unselect();
+                    }, true);
+                  })
 
                   /*
                   this.getUIContext()?.animateTo({ curve: Curve.EaseInOut, duration: 500 }, () => {

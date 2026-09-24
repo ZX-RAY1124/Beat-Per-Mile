@@ -216,6 +216,30 @@ export class NativeAudio {
     }
   }
 
+  /** 静音（音量斜坡到 0）：摇杆擦洗进度时用，避免快速换位置时的杂音 */
+  mute(fadeMs: number): void {
+    if (this.id < 0) {
+      return;
+    }
+    try {
+      music_set_volume(this.id, 0, fadeMs);
+    } catch (e) {
+      console.error('NativeAudio.mute 失败：' + JSON.stringify(e));
+    }
+  }
+
+  /** 恢复满音量 */
+  unmute(fadeMs: number): void {
+    if (this.id < 0) {
+      return;
+    }
+    try {
+      music_set_volume(this.id, 1, fadeMs);
+    } catch (e) {
+      console.error('NativeAudio.unmute 失败：' + JSON.stringify(e));
+    }
+  }
+
   pause(): void {
     if (this.id >= 0) {
       try {
