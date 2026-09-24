@@ -352,10 +352,7 @@ struct Main {
               }
               * */
 
-              Text('主屏幕')
-                .fontSize(28)
-                .fontWeight(FontWeight.Bold)
-                .offset({ y: -100 })
+
 
 
               Row() { //按钮模块
@@ -381,6 +378,12 @@ struct Main {
                     .onClick(() => {
                       console.log(this.windowWidth.toString()) //test
                     })*/
+                  Column(){
+                    SymbolGlyph($r('sys.symbol.play_circle')).fontSize(30).fontColor([Color.White])
+                    Text("动态模式").fontSize(30).fontWeight(FontWeight.Bold).fontColor(Color.White)
+                    Text("点击开始运动").fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
+
+                  }
 
 
                 }
@@ -389,6 +392,7 @@ struct Main {
                   colors: [['#FF6B6B', 0.0], ['#A78BFA', 1.0]]
                 })
                 .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+                .justifyContent(FlexAlign.Center)
                 .height(240)
                 .width(240)
                 .scale({ x: this.Button_1.button_zoom_x, y: this.Button_1.button_zoom_y })
@@ -439,14 +443,19 @@ struct Main {
 
                     })0
                     * */
-
+                  Column(){
+                    SymbolGlyph($r('sys.symbol.play_circle')).fontSize(30).fontColor([Color.White])
+                    Text("固定模式").fontSize(30).fontWeight(FontWeight.Bold).fontColor(Color.White)
+                    Text("点击开始运动").fontSize(20).fontWeight(FontWeight.Bold).fontColor(Color.White)
+                  }
 
                 }
-                .linearGradient({        // 与红圆同款渐变：纯色太平，加一层同角度渐变才有和红圆一样的体积感
+                .linearGradient({        // 采用远端新提交的浅绿→黄渐变
                   angle: 145,
-                  colors: [['#4ECDC4', 0.0], ['#22A06B', 1.0]]
+                  colors: [['#ff9fe752', 0.0], ['#ffe7d064', 1.0]]
                 })
                 .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+                .justifyContent(FlexAlign.Center)
                 .height(240)
                 .width(240)
                 .scale({ x: this.Button_2.button_zoom_x, y: this.Button_2.button_zoom_y })
