@@ -350,10 +350,7 @@ struct Main {
               }
               * */
 
-              Text('主屏幕')
-                .fontSize(28)
-                .fontWeight(FontWeight.Bold)
-                .offset({ y: -100 })
+
 
 
               Row() { //按钮模块
