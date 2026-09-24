@@ -1,16 +1,18 @@
 import { HdsNavDestination } from '@hms.hds.hdsBaseComponent';
 import { Center_Button } from '../ets_libs/Button';
-import { EllipseShape } from '@kit.ArkUI';
+import { EllipseShape, window } from '@kit.ArkUI';
 import { display } from '@kit.ArkUI';
 import { SongListJSON } from '../ets_libs/PlayListStore';
+
+
 
 
 @Component
 struct MainPlayer {
   @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
-  @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',0, '次数'),
-    new topColumnMaker('sys.symbol.figure_running','km',0, '公里数'),
-    new topColumnMaker('sys.symbol.identify_song','BPM',0, '平均BPM')]
+  @State columnList: topColumnMaker[] = [new topColumnMaker($r('sys.symbol.play_circle_fill'),'次',0, '次数'),
+    new topColumnMaker($r('sys.symbol.figure_running'),'km',0, '公里数'),
+    new topColumnMaker($r('sys.symbol.identify_song'),'BPM',0, '歌曲倍速')]
   @State navPathStack :NavPathStack = new NavPathStack();
 
   @Prop value: number = 0;
@@ -42,8 +44,9 @@ struct MainPlayer {
 
   @State BPM_now : number = 0;     //当前BPM
   @State BPM_Average: number = 0;    //目前平均BPM
+  @State Speed : number = 0;    //歌曲倍速
   @State sport_time: number[] = [0,0,0]   //运动时间（格式:00:00:00）
-  @State songTimeLast: number[] = [0,0];     //歌曲剩余时间（格式：00:00）
+  @State songTimeLast: number[] = [1,0];     //歌曲剩余时间（格式：00:00）
   @State songTimePass: number[] = [0,0];    //歌曲已播放时间（格式：00:00）
   @State songName: string = '';     //歌曲名称
   @State Artist: string = '';      //作曲家名称
@@ -55,11 +58,41 @@ struct MainPlayer {
     colorPlan: 0
   }
 
+  @State isPause: boolean = false;
+  @State Pauce_icon: Resource = $r('sys.symbol.pause')
+  @State stop_token : string = ''    //特定向暂停轮询
+  private G_token: boolean = true    //全局轮询令牌
+
+  @State windowWidth: number = 0;     //窗口宽度 弦长
+  @State windowHeight: number = 0;
+  @State R: number = 240*8;         //圆半径
+  @State rotate_angle: number = 0;      //用于制作旋转进度条
+
+  aboutToAppear(): void {
+    try {
+      window.getLastWindow(this.getUIContext().getHostContext())        //获取窗口大小
+        .then((windowClass: window.Window) => {
+          const properties = windowClass.getWindowProperties();
+          const rect = properties.windowRect
+          this.windowWidth = this.getUIContext().px2vp(rect.width) //get window's width
+          this.windowHeight = this.getUIContext().px2vp(rect.height) // get window's height
+          this.rotate_angle = 90 - ((Math.asin(0.5 * this.windowWidth / this.R)) * 180 / Math.PI);
+          console.log((Math.asin(0.5*this.windowWidth/this.R)* 180 / Math.PI).toString());
+          this.startTimeProgressSongRight(1, 'songTimePass')
+          this.startTimeProgressSongLeft(0, 'songTimeLast')
+        })
+
+    } catch (exception){
+      console.error('出现异常' + JSON.stringify(exception))
+    }
+  }
+
+
 
   @Builder
-  Column_UP(index:number){
+  Column_UP( index:number){
     Column(){
-      SymbolGlyph($r(this.columnList[index].icon))
+      SymbolGlyph(this.columnList[index].icon)
         .fontSize(30)
         .fontColor([this.colorList[index]])
         .padding({ bottom: 10 });
@@ -83,33 +116,16 @@ struct MainPlayer {
     .margin(5);
   }
 
-  @Builder
-  SideButton(text: string, callback:() => void){
-    Button(){
-      SymbolGlyph($r(text))
-        .fontSize(30)
-
-    }
-      .borderRadius(5)
-      .fontColor(Color.Black)
-      .height(55)
-      .width(55)
-      .backgroundColor(Color.Transparent)
-      .onClick(() => {
-        callback();
-      })
-  }
-
   @Builder FloatWidgetBuild(){
     Column(){
       Column({space:10}){
-        this.SideButton('sys.symbol.forward_end_fill',() => {})
-        this.SideButton('sys.symbol.pause',() => {})
-        this.SideButton('sys.symbol.backward_end_fill',() => {})
-
+        SideButton({ icon: $r('sys.symbol.forward_end_fill'), onTap: () => {} });
+        SideButton({ icon: this.Pauce_icon, onTap: () => { this.pause() } });
+        SideButton({ icon: $r('sys.symbol.backward_end_fill'), onTap: () => {} });
+        this.rocker_Build();
       }
         .width(60)
-        .height(280)
+        .height(400)
         .borderRadius(15)
         .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
         .alignItems(HorizontalAlign.Center)
@@ -151,13 +167,13 @@ struct MainPlayer {
         })
 
         Column({space:10}){
-          Text("+00:00").fontWeight(FontWeight.Bold).fontSize(25)
-          Text("-03:21").fontWeight(FontWeight.Bold).fontSize(25)
+          Text(`+${this.songTimePass[0].toString().padStart(2, '0')}:${this.songTimePass[1].toString().padStart(2, '0')}`).fontWeight(FontWeight.Bold).fontSize(25)
+          Text(`-${this.songTimeLast[0].toString().padStart(2,'0')}:${this.songTimeLast[1].toString().padStart(2,'0')}`).fontWeight(FontWeight.Bold).fontSize(25)
         }
       }.width("100%").height("70%")
       Column(){
-        Text('Lost Memory').fontWeight(FontWeight.Medium).fontSize(25)
-        Text('Sakuzyo').fontWeight(FontWeight.Regular).fontSize(18).fontColor(Color.Gray)
+        Text(this.songName).fontWeight(FontWeight.Medium).fontSize(25)
+        Text(this.Artist).fontWeight(FontWeight.Regular).fontSize(18).fontColor(Color.Gray)
 
       }
 
@@ -175,6 +191,50 @@ struct MainPlayer {
     })
 
   }
+/**
+ * 摇杆组件*/
+  @State rocker_offset: number = 0;
+  @Builder rocker_Build(){
+    Column() {
+      // 摇杆主题
+      Column(){
+        SymbolGlyph($r('sys.symbol.slider_vertical_3'))
+          .fontColor(['#FF6B6B'])
+          .fontSize(30)
+      }.width(40)
+      .height(40)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor(Color.White)
+      .borderRadius(10)
+      .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
+      .offset({y:this.rocker_offset})
+      .gesture(PanGesture({direction:PanDirection.Vertical})
+        .onActionStart(() => {
+          this.rocker_offset = 0;
+        })
+        .onActionUpdate((event: GestureEvent) => {
+          this.getUIContext().animateTo({ duration: 100, curve: Curve.EaseOut} ,() => {
+            if(event.offsetY <= 60 && event.offsetY >= -60){
+              this.rocker_offset = event.offsetY;
+              console.log(this.rocker_offset.toString())
+            }
+          })
+        })
+        .onActionEnd(() => {
+          this.getUIContext().animateTo({ duration: 400, curve: Curve.EaseOut} ,() => {
+            this.rocker_offset = 0;
+          })
+        }))
+
+    }.width(40)
+    .height(160)
+    .borderWidth(1)
+    .borderColor(this.G_COLOR)
+    .justifyContent(FlexAlign.Center)
+    .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
+    .borderRadius(10)
+  }
+
 
   build(){
     HdsNavDestination(){
@@ -187,7 +247,7 @@ struct MainPlayer {
               .fontColor([this.colorList[0]])
               .padding({ bottom: 10 });
             Text('BPM').fontSize(15)
-            Text('170').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+            Text(this.BPM_now.toString()).fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
 
           }.height(130)
           .width("20%")
@@ -201,7 +261,8 @@ struct MainPlayer {
               .fontColor([this.colorList[0]])
               .padding({ bottom: 10 });
             Text('运动时间').fontSize(15)
-            Text('01:30:20').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+            Text(`${this.sport_time[0].toString().padStart(2, '0')}:${this.sport_time[1].toString().padStart(2, '0')}:${this.sport_time[2].toString().padStart(2, '0')}`).fontSize(25).width(120).textAlign(TextAlign.Center)
+              .fontWeight(FontWeight.Bold)
 
           }.height(130)
           .width("20%")
@@ -212,8 +273,8 @@ struct MainPlayer {
               .fontSize(40)
               .fontColor([this.colorList[0]])
               .padding({ bottom: 10 });
-            Text('平均BPM').fontSize(15)
-            Text('149').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+            Text('歌曲倍速').fontSize(15)
+            Text(this.Speed.toString() + 'x').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
 
           }.height(140)
           .width("20%")
@@ -252,7 +313,13 @@ struct MainPlayer {
       .margin(5);
 
       Row({space:40}){
-        Column().width(110).height(110).backgroundColor('#4ECDC4').clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+        Column(){
+         SymbolGlyph($r('sys.symbol.pause'))
+           .fontSize(60)
+           .fontColor([Color.White])
+        }.width(110).height(110).backgroundColor('#4ECDC4')
+        .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
+        .justifyContent(FlexAlign.Center)
       }.width("100%").justifyContent(FlexAlign.Center).offset({y:500}).zIndex(2)  //调整优先级
 
 
@@ -290,12 +357,13 @@ struct MainPlayer {
 
           }
           .linearGradient({
-            angle: 135,
-            colors: [['#ffee3939', 0.0], ['#A78BFA', 1.0]]
+            angle: 0,
+            colors: [['#ffee3939', 0.0], ['#ffee3939', 0.5],['#A78BFA', 0.5],['#A78BFA', 1.0]]
           })
           .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
           .height(240)
           .width(240)
+          .rotate({angle:this.rotate_angle})
           .scale({ x: this.outCircle.button_zoom_x + 0.05, y: this.outCircle.button_zoom_y + 0.05})
           .offset({ y: this.outCircle.offset_y })
           .onClick(() => {
@@ -356,6 +424,8 @@ struct MainPlayer {
       this.navPathStack = context.pathStack;
       this.WINDOWS_WID = context.pathInfo.param as number;
       this.outCircle.select();
+      this.startTimeProgress(1, 'global_time');
+
 
 
     })
@@ -385,12 +455,134 @@ struct MainPlayer {
     const Sec: number = Number(spliter[1]);
     return [Min,Sec]
   }
-
-  private TimeGoLogic(direction: boolean, Min: number, Sec: number){
+/** 轮询计时器逻辑
+ * @param direction: 正负计时 (`1`正`0`负）
+ * @param Min: 分钟
+ * @param Sec: 秒
+ * @returns [Min,Sec]
+ * */
+  private TimeGoLogic(direction: number, Min: number, Sec: number): number[] {
+    if(direction === 0){
     if(Sec === 0){
-
+      Sec = 60;
+      Min -= 1;
     }
     Sec -= 1;
+    return [Min,Sec]
+    } else if (direction === 1){
+      if(Sec === 59){
+        Sec = 0;
+        Min += 1;
+      }
+      Sec += 1
+      return [Min,Sec]
+
+    } else {
+      console.error("[TimeGoLogic]direction读取错误")
+      return []
+    }
+
+  }
+
+  private TimeGoLogicHour(direction: number, Hour: number ,Min: number, Sec: number): number[] {
+    if(direction === 0){
+      if(Min === 0){
+        Hour -= 1;
+        Min = 59;
+        return [Hour,Min,Sec]
+
+      }
+
+      if(Sec === 0){
+        Sec = 59;
+        Min -= 1;
+        return [Hour,Min,Sec]
+
+      }
+      Sec -= 1;
+      return [Hour,Min,Sec]
+    } else if (direction === 1){
+
+      if(Min === 59){
+        Hour += 1;
+        Min = 0;
+        return [Hour,Min,Sec]
+
+      }
+      if(Sec === 59){
+        Sec = 0;
+        Min += 1;
+        return [Hour,Min,Sec]
+
+      }
+      Sec += 1
+      return [Hour,Min,Sec]
+
+
+    } else {
+      console.error("[TimeGoLogic]direction读取错误")
+      return []
+    }
+
+  }
+
+
+  private Progress(PerStep: number): void{
+    //test 77-101
+    this.getUIContext().animateTo({duration: 300, curve: Curve.EaseInOut}, () => {
+      console.log(this.rotate_angle.toString());
+      this.rotate_angle += PerStep;
+    })
+  }
+
+  /**
+   * 开启计时器
+   * @param type 正倒计时
+   */
+
+  private startTimeProgress(type:number, id_ : string){
+    let id : string = id_;
+    let intervalID = setInterval(() => {
+      if(!this.G_token || id === this.stop_token) {
+        this.stop_token = '';    //销毁令牌
+        clearInterval(intervalID);
+      }
+      this.sport_time = this.TimeGoLogicHour(type, this.sport_time[0], this.sport_time[1], this.sport_time[2])
+
+    }, 1000)
+  }
+
+  private startTimeProgressSongRight(type:number, id_ : string){
+    const way : number = (90 - this.rotate_angle) * 2
+    let perStep = this.songTimeLast[0] * 60 + this.songTimeLast[1]
+    let id : string = id_;
+    let intervalID = setInterval(() => {
+      if(!this.G_token || id === this.stop_token) {
+        this.stop_token = '';    //销毁令牌
+        clearInterval(intervalID);
+      }
+      if(!this.isPause) {
+        this.songTimePass = this.TimeGoLogic(type, this.songTimePass[0], this.songTimePass[1])
+        this.Progress(way/perStep);
+
+      }
+
+    }, 1000)
+  }
+
+
+  private startTimeProgressSongLeft(type:number, id_ : string){
+    let id : string = id_;
+    let intervalID = setInterval(() => {
+      if(!this.G_token || id === this.stop_token) {
+        this.stop_token = '';    //销毁令牌
+        clearInterval(intervalID);
+      }
+      if(!this.isPause) {
+        this.songTimeLast = this.TimeGoLogic(type, this.songTimeLast[0], this.songTimeLast[1])
+      }
+
+    }, 1000)
   }
 
   /** 下一首--绑定下一首按钮 */
@@ -403,14 +595,22 @@ struct MainPlayer {
   }
   /**暂停 */
   private pause(): void {
-    //change button style
+    this.isPause = !this.isPause;
+    if(this.isPause){
+      this.Pauce_icon = $r('sys.symbol.play_fill')
+    } else {
+      this.Pauce_icon = $r('sys.symbol.pause')
+    }
   }
+
+
 
   /**摇杆--进度条调整摇杆控制模拟
    * @param distance 摇杆与原点的距离（+则向前调整，-则向后调整）
    * @param MaxLength 摇杆所能到达的最大距离
    * */
   private rockerLogic(distance: number, MaxLength: number): void {
+    let rate = distance / MaxLength;
 
   }
 
@@ -421,14 +621,18 @@ struct MainPlayer {
 
   }
 
+  private onQuit(): void {
+    this.G_token = false;
+  }
+
 }
 
 class topColumnMaker{
-  icon:string = '';
+  icon: Resource = $r('sys.symbol.play_circle_fill');
   per:string = '';
   statistic:number = 0;
   name:string = '';
-  constructor(icon:string, per:string ,statistic: number,name:string) {
+  constructor(icon: Resource, per:string ,statistic: number,name:string) {
     this.icon = icon;
     this.per = per;
     this.statistic = statistic;
@@ -437,6 +641,27 @@ class topColumnMaker{
 
 }
 
+
+@Component
+struct SideButton {
+  @Prop icon: Resource = $r('sys.symbol.pause');
+  onTap: () => void = () => {};
+
+  build() {
+    Button() {
+      SymbolGlyph(this.icon)
+        .fontSize(30)
+    }
+    .borderRadius(5)
+    .fontColor(Color.Black)
+    .height(55)
+    .width(55)
+    .backgroundColor(Color.Transparent)
+    .onClick(() => {
+      this.onTap();
+    })
+  }
+}
 
 @Builder
 export function load(){

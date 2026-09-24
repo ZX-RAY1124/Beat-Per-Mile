@@ -24,11 +24,11 @@ console.log('模块对象是否为undefined = ' + (entry === undefined));
 console.log(entry.test_audio("test_audio"));
 
 class topColumnMaker{
-  icon:string = '';
+  icon: Resource = $r('sys.symbol.play_circle_fill');
   per:string = '';
   statistic:number = 0;
   name:string = '';
-  constructor(icon:string, per:string ,statistic: number,name:string) {
+  constructor(icon: Resource, per:string ,statistic: number,name:string) {
     this.icon = icon;
     this.per = per;
     this.statistic = statistic;
@@ -67,9 +67,9 @@ struct Main {
 
   @State page_name_list : string[] = ["今日统计","歌单列表","曲线选择","设置"];
   @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
-  @State columnList: topColumnMaker[] = [new topColumnMaker('sys.symbol.play_circle_fill','次',this.Times, '次数'),
-    new topColumnMaker('sys.symbol.figure_running','步',this.Steps, '步数'),
-    new topColumnMaker('sys.symbol.identify_song','BPM',this.ArrangeBPM, '平均BPM')];
+  @State columnList: topColumnMaker[] = [new topColumnMaker($r('sys.symbol.play_circle_fill'),'次',this.Times, '次数'),
+    new topColumnMaker($r('sys.symbol.figure_running'),'步',this.Steps, '步数'),
+    new topColumnMaker($r('sys.symbol.identify_song'),'BPM',this.ArrangeBPM, '平均BPM')];
 
   @State Curves_make_sure: boolean = false;  // 触发器状态
   @State PlayList_make_sure: boolean = false;
@@ -81,7 +81,7 @@ struct Main {
   @Builder
   Column_UP(index:number){
     Column(){
-      SymbolGlyph($r(this.columnList[index].icon))
+      SymbolGlyph(this.columnList[index].icon)
         .fontSize(30)
         .fontColor([this.colorList[index]])
         .padding({ bottom: 10 });
@@ -176,8 +176,8 @@ struct Main {
         .then((windowClass: window.Window) => {
           const properties = windowClass.getWindowProperties();
           const rect = properties.windowRect
-          this.windowWidth = px2vp(rect.width) //get window's width
-          this.windowHeight = px2vp(rect.height) // get window's height
+          this.windowWidth = this.getUIContext().px2vp(rect.width) //get window's width
+          this.windowHeight = this.getUIContext().px2vp(rect.height) // get window's height
         })
 
       } catch (exception){
