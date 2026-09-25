@@ -3,7 +3,6 @@
     "products": [
       {
         "name": "default",
-        "signingConfig": "default",
         "targetSdkVersion": "26.0.0",
         "compatibleSdkVersion": "6.1.1(24)",
         "runtimeOS": "HarmonyOS",
@@ -22,21 +21,6 @@
       },
       {
         "name": "release"
-      }
-    ],
-    "signingConfigs": [
-      {
-        "name": "default",
-        "type": "HarmonyOS",
-        "material": {
-          "certpath": "C:\\Users\\11952\\.ohos\\config\\default_Beat-Per-Mile_rK0xVPS3Qnu_tyRdSgyX25i1p5Zq7ypQRHDOTLdP5rA=.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000001A89F77D45A49DFA047D8385AF837233ABF4DD0C5294CC976A930158C9F91BD0A21178C4A9696B",
-          "profile": "C:\\Users\\11952\\.ohos\\config\\default_Beat-Per-Mile_rK0xVPS3Qnu_tyRdSgyX25i1p5Zq7ypQRHDOTLdP5rA=.p7b",
-          "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\11952\\.ohos\\config\\default_Beat-Per-Mile_rK0xVPS3Qnu_tyRdSgyX25i1p5Zq7ypQRHDOTLdP5rA=.p12",
-          "storePassword": "0000001A8CF84B1F660F7536F4BD14D3070904F5E9DE5111760ACD2898CE7ABD41636F3B39FCB195098F"
-        }
       }
     ]
   },
