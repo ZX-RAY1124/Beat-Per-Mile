@@ -120,7 +120,7 @@ struct MainPlayer {
   CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
   CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
   PAGE_BG: string = '#F5F6F8';
-  @State offset_bar: number = -20;
+  @State offset_bar: number = 0;
   @State gesture_start: number = 0;
 
   // ==================== 引擎 / 音频 / 主循环 ====================

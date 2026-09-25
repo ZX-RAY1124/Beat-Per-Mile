@@ -24,7 +24,21 @@
         "name": "release"
       }
     ],
-
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\18752\\.ohos\\config\\default_Beat_Per_Mile_nCsskC0QITQuQUTutPFzRIf_GA33zML9mtkq4BjE6Jo=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001A9AF61A855B944FE9E7F7A64639D53C9CD99DC6A8457D77C0D02ADC384252C3C41195BAE1075A",
+          "profile": "C:\\Users\\18752\\.ohos\\config\\default_Beat_Per_Mile_nCsskC0QITQuQUTutPFzRIf_GA33zML9mtkq4BjE6Jo=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\18752\\.ohos\\config\\default_Beat_Per_Mile_nCsskC0QITQuQUTutPFzRIf_GA33zML9mtkq4BjE6Jo=.p12",
+          "storePassword": "0000001A199C2FBBCAA735CD5DEA488EF8CC830113A9F5B6DFA320EE1DF8F77AE5299ED4A69CDCFF64C2"
+        }
+      }
+    ]
   },
   "modules": [
     {
