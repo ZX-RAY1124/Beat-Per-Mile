@@ -34,9 +34,12 @@ import {
   stepPipelineSetChaseDelayWindow,
   stepPipelineStart,
   stepPipelineStatus,
-  stepPipelineStop
+  stepPipelineStop,
+  stepSensorStart,
+  stepSensorStop
 } from 'libentry.so';
-import { SOURCE_SIM, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
+import { SOURCE_REAL, SOURCE_SIM, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
+import { stepSensor } from '../ets_libs/StepSensor';
 import { MainPlayerParam } from '../ets_libs/PlayerRouteParam';
 
 /**
@@ -1259,32 +1262,39 @@ struct MainPlayer {
     if (this.pipelineOn) {
       return;
     }
-    if (this.stepSource !== SOURCE_SIM) {
-      return;                      // 真实传感器尚未接线
-    }
     if (this.modeC !== MODE_DYNAMIC) {
       // ★ 预设（恒速/曲线）是**完全开环**：音乐是节拍基准，不读步频、不做相位对齐
       return;
     }
     try {
       stepPipelineSetChaseDelayWindow(getChaseDelaySec());
-      stepPipelineStart(this.stepScenario, this.songBpmC, this.firstBeatC, 0, 0.0);
+      if (this.stepSource === SOURCE_REAL) {
+        // 真实加速度计：native 不起模拟线程，由 StepSensor 订阅后攒批喂进来
+        stepSensorStart(this.songBpmC, this.firstBeatC, 0, 0.0);
+        if (!stepSensor.start()) {
+          stepSensorStop();
+          return;
+        }
+      } else {
+        stepPipelineStart(this.stepScenario, this.songBpmC, this.firstBeatC, 0, 0.0);
+      }
       this.pipelineOn = true;
       this.pipelineCadence = 0;
       this.pipelineMultiplier = 1;
       this.pipelineState = 0;
       this.pipelineSteps = 0;
     } catch (e) {
-      console.error('stepPipelineStart 失败：' + JSON.stringify(e));
+      console.error('startPipeline 失败：' + JSON.stringify(e));
     }
   }
 
   private stopPipeline(): void {
+    stepSensor.stop();             // 真实源：先退订；模拟源下是空操作
     if (!this.pipelineOn) {
       return;
     }
     try {
-      stepPipelineStop();
+      stepPipelineStop();          // native 侧同时会清掉真实源标志
     } catch (e) {
       console.error('stepPipelineStop 失败：' + JSON.stringify(e));
     }

@@ -204,6 +204,26 @@ public:
         wallSec_ += dtSec;
     }
 
+    /**
+     * 真实传感器路径：喂一个采样点（时间戳由调用方给，不推进内部 wallSec_ 时钟）。
+     *   ax/ay/az 单位 m/s²、含重力（与 GaitSim 输出同一约定）；wallSec 是单调墙钟秒。
+     * ★ 与 tick() 的唯一区别：跳过 sim_.tick()，样本来自外部。
+     */
+    void pushSample(double ax, double ay, double az, double wallSec) {
+        // 与 tick() 一致：起步延迟校正窗口必须在 det_.update() 之前设好
+        follower_.delayChase =
+            (chaseDelayWindowSec_ > 0.0 && wallSec < chaseDelayWindowSec_);
+        det_.update(ax, ay, az, wallSec);
+        follower_.update(wallSec);
+        wallSec_ = wallSec;
+    }
+
+    /** 真实传感器路径：记一次 (墙钟, 歌曲位置)，供脚步按时间戳回填（每批一次即可） */
+    void sampleSongClock(double wallSec, double songSec) {
+        clock_.push(wallSec, songSec);
+        curSongSec_ = songSec;
+    }
+
     Status status() const {
         Status st;
         st.cadenceSpm  = cadenceSpm_;

@@ -14,6 +14,8 @@ import {
   setStepScenario,
   setStepSource
 } from '../ets_libs/StepSource';
+import { SensorDebug, stepSensor } from '../ets_libs/StepSensor';
+import { stepSensorStart, stepSensorStop } from 'libentry.so';
 
 /**
  * 算法参数设置页（设置页 →「算法参数设置」进来）
@@ -100,10 +102,35 @@ struct AlgorithmSettings {
   /** 步数检测源那个分段控件的轨道宽度（同样要等布局量出来） */
   @State trackWSource: number = 0;
 
+  // ==================== 传感器测试（真机验证用） ====================
+  /** 本页的测试开关 */
+  @State sensorTestOn: boolean = false;
+  /** 加速度计调试快照。★ key 必须与 StepSensor.SENSOR_DEBUG_KEY 一致 */
+  @StorageLink('stepSensorDebug') @Watch('onSensorDbg') sensorDbg: string = '';
+  @State dbgRunning: boolean = false;
+  @State dbgX: number = 0;
+  @State dbgY: number = 0;
+  @State dbgZ: number = 0;
+  @State dbgHz: number = 0;
+  @State dbgSamples: number = 0;
+  @State dbgCadence: number = 0;
+  @State dbgSteps: number = 0;
+  @State dbgErr: string = '';
+
   aboutToAppear(): void {
     this.stepSource = getStepSource();
     this.stepScenario = getStepScenario();
     this.chaseDelaySec = getChaseDelaySec();
+    this.onSensorDbg();          // 进来先显示一次当前快照
+  }
+
+  aboutToDisappear(): void {
+    // 离开本页就停掉测试，别把传感器订阅/管线留在后台
+    if (this.sensorTestOn) {
+      stepSensor.stop();
+      stepSensorStop();
+      this.sensorTestOn = false;
+    }
   }
 
   build() {
@@ -112,6 +139,7 @@ struct AlgorithmSettings {
         Column({ space: 16 }) {
           this.EngineCard()
           this.StepSourceCard()
+          this.SensorTestCard()
           this.ParamGroup()
         }
         .width('100%')
@@ -271,7 +299,8 @@ struct AlgorithmSettings {
           .fontColor(TEXT_TERTIARY)
           .width('100%')
       } else {
-        Text('真实传感器（加速度计）尚未接线，选它暂时不会有步频数据。')
+        Text('真实传感器：动态模式会订阅加速度计（50Hz），由 native 计步并驱动倍速；'
+          + '预设（恒速/曲线）仍是开环，不读步频。')
           .fontSize(11)
           .fontColor(TEXT_TERTIARY)
           .width('100%')
@@ -428,6 +457,109 @@ struct AlgorithmSettings {
       .strokeWidth(1)
       .color(DIVIDER_COLOR)
       .margin({ left: DIVIDER_INSET })
+  }
+
+  // ==================== 传感器测试卡片 ====================
+
+  /**
+   * 真机验证：直接把加速度计接到 native 同一条步频管线上，
+   * 不用进播放器就能看「硬件 → 计步 → 步频」是否通。
+   * ★ 与播放器共用 StepSensor 单例；测试时请先退出播放器。
+   */
+  @Builder
+  SensorTestCard() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('传感器测试')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(TEXT_PRIMARY)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.sensorTestOn })
+          .selectedColor(ACCENT)
+          .onChange((isOn: boolean) => {
+            this.toggleSensorTest(isOn);
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Text('打开后订阅加速度计（50Hz，单位 m/s²、含重力），数据直接喂给 native 步频检测。')
+        .fontSize(11)
+        .fontColor(TEXT_TERTIARY)
+        .width('100%')
+
+      this.DbgRow('状态', this.dbgRunning ? '采集中' : '未开启')
+      this.DbgRow('x / y / z',
+        this.dbgX.toFixed(3) + ' / ' + this.dbgY.toFixed(3) + ' / ' + this.dbgZ.toFixed(3))
+      this.DbgRow('采样率', this.dbgHz.toFixed(1) + ' Hz')
+      this.DbgRow('累计样点', this.dbgSamples.toString())
+      this.DbgRow('实测步频', this.dbgCadence.toFixed(1) + ' 步/分')
+      this.DbgRow('累计步数', this.dbgSteps.toString())
+      if (this.dbgErr.length > 0) {
+        Text(this.dbgErr)
+          .fontSize(11)
+          .fontColor(ACCENT)
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(CARD_BG)
+    .borderRadius(18)
+    .shadow({ radius: 14, color: '#14000000', offsetX: 0, offsetY: 4 })
+  }
+
+  @Builder
+  DbgRow(label: string, value: string) {
+    Row() {
+      Text(label)
+        .fontSize(13)
+        .fontColor(TEXT_SECONDARY)
+        .layoutWeight(1)
+      Text(value)
+        .fontSize(13)
+        .fontColor(TEXT_PRIMARY)
+    }
+    .width('100%')
+  }
+
+  /** 开关：开 = 配好 native 管线 + 订阅；关 = 退订 + 停管线 */
+  private toggleSensorTest(on: boolean): void {
+    this.sensorTestOn = on;
+    if (on) {
+      // 这里没有播放器，用一条"假歌"（120BPM）只为让检测器/跟随器有输入；
+      // 步频本身与 songBpm 无关。
+      stepSensorStart(120.0, 0.0, 0, 0.0);
+      if (!stepSensor.start()) {
+        stepSensorStop();
+        this.sensorTestOn = false;
+      }
+    } else {
+      stepSensor.stop();
+      stepSensorStop();
+    }
+  }
+
+  /** StepSensor 每次 publish 都会更新 AppStorage，这里解析成 @State 供 UI 显示 */
+  private onSensorDbg(): void {
+    if (this.sensorDbg.length === 0) {
+      return;
+    }
+    try {
+      const d: SensorDebug = JSON.parse(this.sensorDbg) as SensorDebug;
+      this.dbgRunning = d.running;
+      this.dbgX = d.x;
+      this.dbgY = d.y;
+      this.dbgZ = d.z;
+      this.dbgHz = d.hz;
+      this.dbgSamples = d.samples;
+      this.dbgCadence = d.cadence;
+      this.dbgSteps = d.steps;
+      this.dbgErr = d.error;
+    } catch (e) {
+      // 解析失败就保持上一次的值
+    }
   }
 
   /** 参数页还没做，先给个反馈方便确认点到了哪个 */

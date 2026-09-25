@@ -104,6 +104,16 @@ export const stepPipelineSetChaseDelayWindow: (sec: number) => void;
  */
 export const stepPipelineStatus: () => string;
 /**
+ * S3：真实传感器源（被动喂样）。ArkTS 用 @kit.SensorServiceKit 订阅加速度计
+ * （单位 m/s²、含重力），攒一批（~100ms）调 stepSensorPush()。
+ *   stepSensorStart(songBpm, firstBeatSec, mode, targetBpm)  与 stepPipelineStart 同参，但不跑模拟线程
+ *   stepSensorPush(ax, ay, az, rateHz)  三个等长 Float32Array；时间戳按名义采样率回填
+ *   stepSensorStop()
+ */
+export const stepSensorStart: (songBpm: number, firstBeatSec: number, mode: number, targetBpm: number) => void;
+export const stepSensorPush: (ax: Float32Array, ay: Float32Array, az: Float32Array, rateHz: number) => void;
+export const stepSensorStop: () => void;
+/**
  * 查询原生播放状态。返回 JSON 字符串：
  *   {"ok":boolean,"state":"idle|loading|ready|failed|gone","frames":number,
  *    "rate":number,"posSec":number,"error":string}
