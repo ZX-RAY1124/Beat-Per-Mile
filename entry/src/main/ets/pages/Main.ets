@@ -112,11 +112,11 @@ struct Main {
     Column() {
       SymbolGlyph($r(resource))
         .fontSize(20)
-        .fontColor([this.selected_id === tabIndex ? Color.Blue : Color.Gray])
+        .fontColor([this.selected_id === tabIndex ? '#FF6B6B' : Color.Gray])
         .padding({ bottom: 5 });
       Text(text)
         .fontSize(10)
-        .fontColor(this.selected_id === tabIndex ? Color.Blue : Color.Gray)
+        .fontColor(this.selected_id === tabIndex ? '#FF6B6B' : Color.Gray)
         .textAlign(TextAlign.Center)
     }
   }
