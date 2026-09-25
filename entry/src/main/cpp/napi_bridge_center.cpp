@@ -21,6 +21,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <sstream>
+#include <cmath>
 // 暂时不引用 essentia，先验证编译链路没问题
 
 // ─── 播放用环形缓冲区：无锁单生产者-单消费者（SPSC） ───
@@ -1712,24 +1713,6 @@ static double steadyNowSec() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-/** 取一个 Float32Array 的数据指针与长度；不是 Float32Array / 为空则返回 false */
-static bool getF32(napi_env env, napi_value v, const float** out, size_t* len) {
-    napi_typedarray_type type = napi_float32_array;
-    size_t l = 0;
-    void*  d = nullptr;
-    napi_value ab = nullptr;
-    size_t off = 0;
-    if (napi_get_typedarray_info(env, v, &type, &l, &d, &ab, &off) != napi_ok) {
-        return false;
-    }
-    if (type != napi_float32_array || d == nullptr || l == 0) {
-        return false;
-    }
-    *out = static_cast<const float*>(d);
-    *len = l;
-    return true;
-}
-
 /**
  * stepSensorStart(songBpm, firstBeatSec, mode, targetBpm)
  *   配置真实源管线并进入"被动喂样"状态；不创建模拟线程。
@@ -1772,34 +1755,29 @@ static napi_value stepSensorStart(napi_env env, napi_callback_info info) {
 }
 
 /**
- * stepSensorPush(ax, ay, az, rateHz)
- *   一批等长 Float32Array（单位 m/s²，含重力）。时间戳按
- *   "批次到达时刻 − (n−1−i)/rateHz" 回填，这样 NAPI 批次抖动不影响单个样点。
+ * stepSensorPush(samples, n, rateHz)
+ *   samples: 一维数组，长度 >= 3n，布局 [x0,y0,z0, x1,y1,z1, ...]，单位 m/s²、含重力。
+ *   ★ 刻意用普通 number[] + napi_get_element，而不是 Float32Array：typed array 的
+ *     data 指针/长度在这条 ArkTS→NAPI 路上出现过脏值（读出 1e31 级的数据），
+ *     普通数组逐个取值不依赖任何指针/内存假设，最稳。
  */
 static napi_value stepSensorPush(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value args[4] = {nullptr};
+    size_t argc = 3;
+    napi_value args[3] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-    if (argc < 4 || !g_sensorRunning.load()) {
+    if (argc < 3 || !g_sensorRunning.load() || args[0] == nullptr) {
         return nullptr;
     }
 
-    const float* ax = nullptr;
-    const float* ay = nullptr;
-    const float* az = nullptr;
-    size_t nx = 0, ny = 0, nz = 0;
-    if (!getF32(env, args[0], &ax, &nx) ||
-        !getF32(env, args[1], &ay, &ny) ||
-        !getF32(env, args[2], &az, &nz)) {
+    uint32_t len = 0;
+    if (napi_get_array_length(env, args[0], &len) != napi_ok) {
         return nullptr;
     }
-    size_t n = nx;
-    if (ny < n) n = ny;
-    if (nz < n) n = nz;
-
+    int32_t n = 0;
+    napi_get_value_int32(env, args[1], &n);
     double rateHz = 50.0;
-    napi_get_value_double(env, args[3], &rateHz);
-    if (!(rateHz > 1.0) || n == 0) {
+    napi_get_value_double(env, args[2], &rateHz);
+    if (n <= 0 || !(rateHz > 1.0) || static_cast<uint32_t>(n) * 3u > len) {
         return nullptr;
     }
 
@@ -1813,27 +1791,45 @@ static napi_value stepSensorPush(napi_env env, napi_callback_info info) {
         songSec = static_cast<double>(pl->getInputPosition()) / static_cast<double>(sr);
     }
 
+    double magMin = 1e9, magMax = -1e9, magSum = 0.0;
+    double lastX = 0.0, lastY = 0.0, lastZ = 0.0;
     steprun::Status st;
     {
         std::lock_guard<std::mutex> lk(g_stepMutex);
         g_stepPipeline.sampleSongClock(now, songSec);
-        for (size_t i = 0; i < n; ++i) {
+        for (int32_t i = 0; i < n; ++i) {
+            double v[3] = {0.0, 0.0, 0.0};
+            for (int k = 0; k < 3; ++k) {
+                napi_value el = nullptr;
+                if (napi_get_element(env, args[0], static_cast<uint32_t>(i * 3 + k), &el) != napi_ok
+                    || el == nullptr) {
+                    continue;
+                }
+                napi_get_value_double(env, el, &v[k]);
+            }
             const double t = now - static_cast<double>(n - 1 - i) / rateHz;
-            g_stepPipeline.pushSample(ax[i], ay[i], az[i], t);
+            g_stepPipeline.pushSample(v[0], v[1], v[2], t);
+            const double mag = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (mag < magMin) magMin = mag;
+            if (mag > magMax) magMax = mag;
+            magSum += mag;
+            lastX = v[0]; lastY = v[1]; lastZ = v[2];
         }
         st = g_stepPipeline.status();
         g_speed.store(st.multiplier, std::memory_order_relaxed);
     }
 
-    g_sensorLastX = ax[n - 1];
-    g_sensorLastY = ay[n - 1];
-    g_sensorLastZ = az[n - 1];
+    g_sensorLastX = lastX;
+    g_sensorLastY = lastY;
+    g_sensorLastZ = lastZ;
     g_sensorLastHz = rateHz;
     static std::atomic<int> pushCount{0};
     if ((pushCount.fetch_add(1) % 25) == 0) {
-        OH_LOG_INFO(LOG_APP, "[step] sensor: ax=%{public}.3f ay=%{public}.3f az=%{public}.3f "
-                             "hz=%{public}.1f cadence=%{public}.1f steps=%{public}llu mult=%{public}.3f",
-                    g_sensorLastX, g_sensorLastY, g_sensorLastZ, rateHz,
+        OH_LOG_INFO(LOG_APP, "[step] sensor: n=%{public}d last=%{public}.3f/%{public}.3f/%{public}.3f "
+                             "|a| min=%{public}.2f mean=%{public}.2f max=%{public}.2f "
+                             "cadence=%{public}.1f steps=%{public}llu mult=%{public}.3f",
+                    static_cast<int>(n), lastX, lastY, lastZ,
+                    magMin, magSum / static_cast<double>(n), magMax,
                     st.cadenceSpm, static_cast<unsigned long long>(st.steps), st.multiplier);
     }
     return nullptr;

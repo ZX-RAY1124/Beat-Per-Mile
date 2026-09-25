@@ -63,6 +63,22 @@ class StepSensorHub {
 
   isRunning(): boolean { return this.running; }
 
+  /** 当前调试快照。★ 设置页用定时轮询读它（AppStorage/@Watch 那条路不刷新） */
+  snapshot(): SensorDebug {
+    const d: SensorDebug = {
+      running: this.running,
+      x: this.lastX,
+      y: this.lastY,
+      z: this.lastZ,
+      hz: this.hz,
+      samples: this.total,
+      cadence: this.cadence,
+      steps: this.steps,
+      error: this.err
+    };
+    return d;
+  }
+
   /** 开始订阅（已在跑则直接返回 true）；失败原因写进调试快照 */
   start(): boolean {
     if (this.running) { return true; }
@@ -134,14 +150,24 @@ class StepSensorHub {
     if (this.total % 10 === 0) {
       this.publish();
     }
+    if (this.total % 50 === 0) {
+      console.info('[StepSensor] onData total=' + this.total + ' x=' + x.toFixed(2));
+    }
   }
 
   /** 把攒好的一批送 native；顺带刷新 native 管线的步频/步数 */
   private flush(): void {
-    if (this.ax.length === 0) { return; }
+    const n: number = this.ax.length;
+    if (n === 0) { return; }
+    // 摊平成一维 [x0,y0,z0, x1,y1,z1, ...]：普通 number[]，不走 typed array
+    const flat: number[] = [];
+    for (let i = 0; i < n; i++) {
+      flat.push(this.ax[i]);
+      flat.push(this.ay[i]);
+      flat.push(this.az[i]);
+    }
     try {
-      stepSensorPush(new Float32Array(this.ax), new Float32Array(this.ay),
-        new Float32Array(this.az), TARGET_HZ);
+      stepSensorPush(flat, n, TARGET_HZ);
     } catch (e) {
       const be = e as BusinessError;
       this.err = 'stepSensorPush 失败 ' + be.code;
@@ -176,3 +202,4 @@ class StepSensorHub {
 
 /** 进程内单例：播放器与设置页测试共用 */
 export const stepSensor: StepSensorHub = new StepSensorHub();
+console.info('[StepSensor] module init (此日志出现几次 = 模块被实例化几次)');

@@ -105,8 +105,8 @@ struct AlgorithmSettings {
   // ==================== 传感器测试（真机验证用） ====================
   /** 本页的测试开关 */
   @State sensorTestOn: boolean = false;
-  /** 加速度计调试快照。★ key 必须与 StepSensor.SENSOR_DEBUG_KEY 一致 */
-  @StorageLink('stepSensorDebug') @Watch('onSensorDbg') sensorDbg: string = '';
+  /** 轮询定时器 id（-1 = 未启动）。★ 不用 AppStorage/@Watch —— 传感器回调写它不会刷新 UI */
+  private dbgTimer: number = -1;
   @State dbgRunning: boolean = false;
   @State dbgX: number = 0;
   @State dbgY: number = 0;
@@ -116,20 +116,42 @@ struct AlgorithmSettings {
   @State dbgCadence: number = 0;
   @State dbgSteps: number = 0;
   @State dbgErr: string = '';
+  /** 轮询回调实际执行了多少次（显示在卡片上，用来区分"定时器没跑"还是"数据没变"） */
+  @State dbgTick: number = 0;
 
   aboutToAppear(): void {
     this.stepSource = getStepSource();
     this.stepScenario = getStepScenario();
     this.chaseDelaySec = getChaseDelaySec();
-    this.onSensorDbg();          // 进来先显示一次当前快照
+    this.refreshSensorDbg();     // 进来先显示一次当前快照
+    if (this.sensorTestOn) {
+      this.startDbgTimer();      // 页面重建时把轮询接上
+    }
   }
 
   aboutToDisappear(): void {
+    this.stopDbgTimer();
     // 离开本页就停掉测试，别把传感器订阅/管线留在后台
     if (this.sensorTestOn) {
       stepSensor.stop();
       stepSensorStop();
       this.sensorTestOn = false;
+    }
+  }
+
+  /** 300ms 轮询一次调试快照：在 UI 线程 setState，保证一定刷新 */
+  private startDbgTimer(): void {
+    if (this.dbgTimer !== -1) { return; }
+    this.dbgTimer = setInterval(() => {
+      this.refreshSensorDbg();
+    }, 300);
+    console.info('[SensorDbg] timer started');
+  }
+
+  private stopDbgTimer(): void {
+    if (this.dbgTimer !== -1) {
+      clearInterval(this.dbgTimer);
+      this.dbgTimer = -1;
     }
   }
 
@@ -489,13 +511,37 @@ struct AlgorithmSettings {
         .fontColor(TEXT_TERTIARY)
         .width('100%')
 
-      this.DbgRow('状态', this.dbgRunning ? '采集中' : '未开启')
-      this.DbgRow('x / y / z',
-        this.dbgX.toFixed(3) + ' / ' + this.dbgY.toFixed(3) + ' / ' + this.dbgZ.toFixed(3))
-      this.DbgRow('采样率', this.dbgHz.toFixed(1) + ' Hz')
-      this.DbgRow('累计样点', this.dbgSamples.toString())
-      this.DbgRow('实测步频', this.dbgCadence.toFixed(1) + ' 步/分')
-      this.DbgRow('累计步数', this.dbgSteps.toString())
+      // ★ 这些行**必须内联**：ArkUI 的 @Builder 按值传参时不会随参数变化刷新内部 UI，
+      //   之前"只在进页面时刷一次"正是这个原因（定时器其实一直在跑）。
+      Row() {
+        Text('状态').fontSize(13).fontColor(TEXT_SECONDARY).layoutWeight(1)
+        Text(this.dbgRunning ? '采集中' : '未开启').fontSize(13).fontColor(TEXT_PRIMARY)
+      }.width('100%')
+      Row() {
+        Text('刷新次数').fontSize(13).fontColor(TEXT_SECONDARY).layoutWeight(1)
+        Text(this.dbgTick.toString()).fontSize(13).fontColor(TEXT_PRIMARY)
+      }.width('100%')
+      Row() {
+        Text('x / y / z').fontSize(13).fontColor(TEXT_SECONDARY).layoutWeight(1)
+        Text(this.dbgX.toFixed(3) + ' / ' + this.dbgY.toFixed(3) + ' / ' + this.dbgZ.toFixed(3))
+          .fontSize(13).fontColor(TEXT_PRIMARY)
+      }.width('100%')
+      Row() {
+        Text('采样率').fontSize(13).fontColor(TEXT_SECONDARY).layoutWeight(1)
+        Text(this.dbgHz.toFixed(1) + ' Hz').fontSize(13).fontColor(TEXT_PRIMARY)
+      }.width('100%')
+      Row() {
+        Text('累计样点').fontSize(13).fontColor(TEXT_SECONDARY).layoutWeight(1)
+        Text(this.dbgSamples.toString()).fontSize(13).fontColor(TEXT_PRIMARY)
+      }.width('100%')
+      Row() {
+        Text('实测步频').fontSize(13).fontColor(TEXT_SECONDARY).layoutWeight(1)
+        Text(this.dbgCadence.toFixed(1) + ' 步/分').fontSize(13).fontColor(TEXT_PRIMARY)
+      }.width('100%')
+      Row() {
+        Text('累计步数').fontSize(13).fontColor(TEXT_SECONDARY).layoutWeight(1)
+        Text(this.dbgSteps.toString()).fontSize(13).fontColor(TEXT_PRIMARY)
+      }.width('100%')
       if (this.dbgErr.length > 0) {
         Text(this.dbgErr)
           .fontSize(11)
@@ -510,55 +556,58 @@ struct AlgorithmSettings {
     .shadow({ radius: 14, color: '#14000000', offsetX: 0, offsetY: 4 })
   }
 
-  @Builder
-  DbgRow(label: string, value: string) {
-    Row() {
-      Text(label)
-        .fontSize(13)
-        .fontColor(TEXT_SECONDARY)
-        .layoutWeight(1)
-      Text(value)
-        .fontSize(13)
-        .fontColor(TEXT_PRIMARY)
-    }
-    .width('100%')
-  }
-
   /** 开关：开 = 配好 native 管线 + 订阅；关 = 退订 + 停管线 */
   private toggleSensorTest(on: boolean): void {
+    if (on === this.sensorTestOn) {
+      return;                    // 忽略重渲染时回弹 / 重复的 onChange
+    }
     this.sensorTestOn = on;
     if (on) {
       // 这里没有播放器，用一条"假歌"（120BPM）只为让检测器/跟随器有输入；
       // 步频本身与 songBpm 无关。
-      stepSensorStart(120.0, 0.0, 0, 0.0);
+      try {
+        stepSensorStart(120.0, 0.0, 0, 0.0);
+      } catch (e) {
+        this.dbgErr = 'stepSensorStart 失败: ' + JSON.stringify(e);
+        this.sensorTestOn = false;
+        return;
+      }
       if (!stepSensor.start()) {
         stepSensorStop();
         this.sensorTestOn = false;
+        this.refreshSensorDbg();
+        return;
       }
+      this.startDbgTimer();
+      this.refreshSensorDbg();
     } else {
+      this.stopDbgTimer();
       stepSensor.stop();
       stepSensorStop();
+      this.refreshSensorDbg();
     }
   }
 
-  /** StepSensor 每次 publish 都会更新 AppStorage，这里解析成 @State 供 UI 显示 */
-  private onSensorDbg(): void {
-    if (this.sensorDbg.length === 0) {
-      return;
+  /** 从 StepSensor 单例取当前快照写进 @State（由 300ms 定时器驱动） */
+  private refreshSensorDbg(): void {
+    const d: SensorDebug = stepSensor.snapshot();
+    this.dbgTick++;
+    if (this.dbgTick % 5 === 0) {
+      console.info('[SensorDbg] tick=' + this.dbgTick + ' running=' + d.running
+        + ' samples=' + d.samples + ' hz=' + d.hz.toFixed(1)
+        + ' xyz=' + d.x.toFixed(2) + ',' + d.y.toFixed(2) + ',' + d.z.toFixed(2)
+        + ' cadence=' + d.cadence.toFixed(1) + ' steps=' + d.steps);
     }
-    try {
-      const d: SensorDebug = JSON.parse(this.sensorDbg) as SensorDebug;
-      this.dbgRunning = d.running;
-      this.dbgX = d.x;
-      this.dbgY = d.y;
-      this.dbgZ = d.z;
-      this.dbgHz = d.hz;
-      this.dbgSamples = d.samples;
-      this.dbgCadence = d.cadence;
-      this.dbgSteps = d.steps;
+    this.dbgRunning = d.running;
+    this.dbgX = d.x;
+    this.dbgY = d.y;
+    this.dbgZ = d.z;
+    this.dbgHz = d.hz;
+    this.dbgSamples = d.samples;
+    this.dbgCadence = d.cadence;
+    this.dbgSteps = d.steps;
+    if (d.error.length > 0) {
       this.dbgErr = d.error;
-    } catch (e) {
-      // 解析失败就保持上一次的值
     }
   }
 

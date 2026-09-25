@@ -111,7 +111,7 @@ export const stepPipelineStatus: () => string;
  *   stepSensorStop()
  */
 export const stepSensorStart: (songBpm: number, firstBeatSec: number, mode: number, targetBpm: number) => void;
-export const stepSensorPush: (ax: Float32Array, ay: Float32Array, az: Float32Array, rateHz: number) => void;
+export const stepSensorPush: (samples: number[], n: number, rateHz: number) => void;
 export const stepSensorStop: () => void;
 /**
  * 查询原生播放状态。返回 JSON 字符串：
