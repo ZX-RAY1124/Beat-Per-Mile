@@ -372,6 +372,12 @@ export function resolvePlaylistEntries(ctx: common.UIAbilityContext,
 export class RunDemoEngine {
   // ---- 歌曲 ----
   private songBpmV: number = 150;
+  /**
+   * 本首歌选定的"节拍层级 BPM"（= songBpmV · 2^k，由播放侧在每次起播时定一次）。
+   * ≤0 表示还没定过，此时一律按 songBpmV（原始分析值）算。
+   * ★ 倍速与拍相位都必须用它：只乘倍速会让拍网格差一个八度（见 C++核心协同方案 §4.9）。
+   */
+  private levelBpmV: number = -1;
   private firstBeatV: number = 0;
   private durSecV: number = 198;
   private songNameV: string = '演示歌曲（未找到 song_data.json）';
@@ -456,6 +462,7 @@ export class RunDemoEngine {
     this.beatIndexV = -1;
     this.stepAcc = 0;
     this.stepCountV = 0;
+    this.levelBpmV = -1;      // 换歌 → 层级重定（播放侧起播时再 setLevelBpm）
   }
 
   /**
@@ -538,7 +545,10 @@ export class RunDemoEngine {
   setConstBpm(v: number): void { this.constBpmV = v; }
   getCadenceBase(): number { return this.cadenceBaseV; }
   setCadenceBase(v: number): void { this.cadenceBaseV = v; }
-  getSongBpm(): number { return this.songBpmV; }
+  getSongBpm(): number { return this.songBpmV; }          // 分析出的原始 BPM
+  /** 本首选定层级后的 BPM（没定过就是原始值）；倍速与拍相位用它 */
+  getLevelBpm(): number { return this.levelBpmV > 0 ? this.levelBpmV : this.songBpmV; }
+  setLevelBpm(v: number): void { this.levelBpmV = v; }
   getDuration(): number { return this.durSecV; }
   getSongName(): string { return this.songNameV; }
   getArtist(): string { return this.artistV; }
@@ -630,8 +640,9 @@ export class RunDemoEngine {
     }
 
     // ---- 5) 倍速 = 目标步频 ÷ 歌曲 BPM（平滑，对应 TempoFollower.tau）----
-    if (this.targetBpmV > 0 && this.songBpmV > 0) {
-      const raw: number = clampNum(this.targetBpmV / this.songBpmV, MULT_MIN, MULT_MAX);
+    const bpmRef: number = this.getLevelBpm();
+    if (this.targetBpmV > 0 && bpmRef > 0) {
+      const raw: number = clampNum(this.targetBpmV / bpmRef, MULT_MIN, MULT_MAX);
       if (this.playingV) {
         const spA: number = 1 - Math.exp(-dtSec / speedTau(this.modeV));
         this.speedV += spA * (raw - this.speedV);
@@ -659,7 +670,7 @@ export class RunDemoEngine {
     }
 
     // ---- 7) 拍相位（对应 beatgrid::Grid.phase01 / tempo::beatOffset）----
-    const period: number = 60.0 / this.songBpmV;
+    const period: number = bpmRef > 0 ? 60.0 / bpmRef : 0.5;
     let rel: number = (this.posSecV - this.firstBeatV) % period;
     if (rel < 0) {
       rel += period;
@@ -670,7 +681,8 @@ export class RunDemoEngine {
 
   /** 取一帧状态快照 */
   status(): RunStatus {
-    const period: number = this.songBpmV > 0 ? 60.0 / this.songBpmV : 0.5;
+    const bpmRef: number = this.getLevelBpm();
+    const period: number = bpmRef > 0 ? 60.0 / bpmRef : 0.5;
     let rel: number = (this.posSecV - this.firstBeatV) % period;
     if (rel < 0) {
       rel += period;
@@ -684,7 +696,7 @@ export class RunDemoEngine {
       posSec: this.posSecV,
       durSec: this.durSecV,
       speed: this.speedV,
-      songBpm: this.songBpmV,
+      songBpm: bpmRef,
       firstBeat: this.firstBeatV,
       targetBpm: this.targetBpmV,
       cadenceSpm: this.cadenceSpmV,

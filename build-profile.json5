@@ -1,6 +1,5 @@
 {
   "app": {
-
     "products": [
       {
         "name": "default",
@@ -23,6 +22,21 @@
       },
       {
         "name": "release"
+      }
+    ],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\11952\\.ohos\\config\\default_Beat-Per-Mile_rK0xVPS3Qnu_tyRdSgyX25i1p5Zq7ypQRHDOTLdP5rA=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001ACB2CCA25EC1DA33DAF9FBC552A5D880FC5109499C466779C3764816BE2426058E2E446D8C543",
+          "profile": "C:\\Users\\11952\\.ohos\\config\\default_Beat-Per-Mile_rK0xVPS3Qnu_tyRdSgyX25i1p5Zq7ypQRHDOTLdP5rA=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\11952\\.ohos\\config\\default_Beat-Per-Mile_rK0xVPS3Qnu_tyRdSgyX25i1p5Zq7ypQRHDOTLdP5rA=.p12",
+          "storePassword": "0000001AC6A3047F2C7CC0304512FBDFDED1ED000AE90787BCF07DF731F5A8F10B7C604CD94F5B8AA13D"
+        }
       }
     ]
   },

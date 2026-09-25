@@ -61,6 +61,14 @@ const PREPARE_AHEAD_SEC: number = 30.0;
 /** 自动接歌防连环跳：新会话至少真的播这么久，才允许被判定"结束并切下一首"（毫秒） */
 const MIN_SESSION_PLAY_MS: number = 2500;
 
+/**
+ * 八度对齐：让有效倍速 m = 目标步频 / 层级BPM 落进 [LOW, HIGH)。
+ * 宽度正好是一个八度（HIGH/LOW = 2），而候选层级彼此也差 2 倍 ⇒ 有且只有一档命中。
+ * 取偏快的一侧（快放比慢放好听）。
+ */
+const OCTAVE_LOW: number = 0.8;
+const OCTAVE_HIGH: number = 1.6;
+
 /** 没有 song_data.json 时的内置演示音源（rawfile） */
 const NATIVE_RAW: string = 'LostMemory.m4a';
 
@@ -139,6 +147,11 @@ struct MainPlayer {
   @State stop_token : string = ''    //特定向暂停轮询
   private G_token: boolean = true    //全局轮询令牌
   @State nativeState: string = 'idle';
+  /** 八度对齐的附加倍率（本首歌开始播放时定一次，2 的整数次幂；显示在倍速下面） */
+  @State octaveMult: number = 1;
+  /** 分析出的原始歌曲 BPM / 选定层级后的 BPM（歌曲信息栏显示成 原始（层级）） */
+  @State rawSongBpm: number = 0;
+  @State levelSongBpm: number = 0;
 
   // ==================== 内部标量 ====================
   private posSecC: number = 0;
@@ -356,7 +369,7 @@ struct MainPlayer {
           Text('+' + this.songTimePass[0].toString().padStart(2, '0') + ':' + this.songTimePass[1].toString().padStart(2, '0')).fontWeight(FontWeight.Bold).fontSize(25)
           Text('-' + this.songTimeLast[0].toString().padStart(2,'0') + ':' + this.songTimeLast[1].toString().padStart(2,'0')).fontWeight(FontWeight.Bold).fontSize(25)
         }
-      }.width("100%").height("70%")
+      }.width("100%").height("62%")
       Column(){
         // 歌名 / 作者可能很长：用 Marquee 在组件边界内滚动，短文本自然静止
         Marquee({ start: true, step: 4, loop: -1, fromStart: true, src: this.songName })
@@ -367,8 +380,12 @@ struct MainPlayer {
           .fontColor('#1B1B2F')
         Marquee({ start: true, step: 4, loop: -1, fromStart: true, src: this.Artist })
           .width(210)
-          .height(26)
+          .height(24)
           .fontSize(18)
+          .fontColor(Color.Gray)
+        // 歌曲 BPM：原始分析值（选定层级后实际按括号里那个算）
+        Text(this.rawSongBpm.toFixed(0) + 'BPM（' + this.levelSongBpm.toFixed(0) + 'BPM）')
+          .fontSize(15)
           .fontColor(Color.Gray)
 
       }
@@ -476,6 +493,8 @@ struct MainPlayer {
               .padding({ bottom: 10 });
             Text('歌曲倍速').fontSize(15)
             Text(this.Speed.toString() + 'x').fontSize(25).width(120).textAlign(TextAlign.Center).fontWeight(FontWeight.Bold)
+            // 八度对齐的附加倍率：每首歌开始播放时定一次，整首不变
+            Text('x' + this.octaveMult.toFixed(2)).fontSize(12).fontColor('#ff646161')
 
           }.height(140)
           .width("20%")
@@ -646,8 +665,9 @@ struct MainPlayer {
       this.playingC = true;
       this.isPause = false;
       this.Pauce_icon = $r('sys.symbol.pause');
-      this.startPipeline();
+      // 先起原生（startNative 里会定本首歌的八度层级 B_canon），再起管线用同一个 B_canon
       this.startNative();
+      this.startPipeline();
       this.noteSessionStart();
       this.pullStatus();
     })
@@ -907,8 +927,9 @@ struct MainPlayer {
     this.Pauce_icon = next ? $r('sys.symbol.pause') : $r('sys.symbol.play_fill');
     this.syncStepSettings();
     if (next) {
-      this.startPipeline();
+      // 继续播放也算一次"开始"：重定八度层级（暂停时曲线冻结，C 不变，通常结果不变）
       this.startNative();
+      this.startPipeline();
     } else {
       this.stopPipeline();
       this.native.pause();
@@ -918,6 +939,9 @@ struct MainPlayer {
   }
 
   private startNative(): void {
+    // 本首歌起播：按当前目标步频定八度层级，并把 原始/层级 BPM 同步进展示与管线
+    this.freezeOctaveLevel();
+    this.pullStatus();
     // 一按播放先冻住页面位置：原生解码/建缓冲期间不出声
     this.engine.setAudioReady(false);
 
@@ -1149,6 +1173,13 @@ struct MainPlayer {
     this.loadSongList(c);
     this.engine.setPlaying(true);
     this.playingC = true;
+    // 换歌了：重定八度层级；动态模式下管线的拍网格也要按新歌的 B_canon 重建
+    this.freezeOctaveLevel();
+    this.pullStatus();
+    if (this.modeC === MODE_DYNAMIC) {
+      this.stopPipeline();
+      this.startPipeline();
+    }
     this.cutGuardUntil = Date.now() + 1000;
   }
 
@@ -1337,13 +1368,65 @@ struct MainPlayer {
     this.glowOpacity = Math.pow(a, 1.6);
   }
 
+  /**
+   * 当前目标步频 C（定八度层级用）：按模式取对应的规定值。
+   * 动态用最近一次目标/实测；起步阶段还没有就退到模拟基准。
+   */
+  private currentTargetBpm(): number {
+    if (this.modeC === MODE_CONSTANT) {
+      return this.engine.getConstBpm();
+    }
+    if (this.modeC === MODE_CURVE) {
+      const b: number = this.engine.currentCurveBpm();
+      return b > 0 ? b : this.engine.getSongBpm();
+    }
+    const st: RunStatus = this.engine.status();
+    if (st.targetBpm > 0) { return st.targetBpm; }
+    if (st.cadenceSpm > 0) { return st.cadenceSpm; }
+    return this.engine.getCadenceBase();
+  }
+
+  /**
+   * 八度对齐：每次"开始播放一首歌"时定一次，整首不变。
+   *   目标步频 C、原始歌曲 BPM B，在候选层级 B·2^k 里选使**有效倍速**
+   *   m = C / (B·2^k) 落在 [OCTAVE_LOW, OCTAVE_HIGH) 的那一档（偏快的一侧）。
+   *   区间宽度正好一个八度（=2），候选倍速彼此也差 2 倍 ⇒ 有且只有一档命中。
+   *   附加倍率（显示用）g = B / B_canon = 2^(-k)。
+   * ★ 整首固定：若每帧按变化的 C 重算，曲线模式跨过区间边界时 g 会突然 ×2 —— 就是倍速断层。
+   * ★ 必须把 B_canon 交给引擎（而不是最后再乘 g）：引擎/管线的拍网格周期是 60/B_canon，
+   *   只乘倍速会让网格差一个八度。
+   */
+  private freezeOctaveLevel(): void {
+    const raw: number = this.engine.getSongBpm();
+    const c: number = this.currentTargetBpm();
+    if (!(raw > 0) || !(c > 0)) {
+      this.octaveMult = 1;
+      this.engine.setLevelBpm(raw);
+      return;
+    }
+    const ratio: number = c / raw;
+    // 先按区间几何中点做 log2 四舍五入，再各修一次边界（浮点）
+    const mid: number = Math.sqrt(OCTAVE_LOW * OCTAVE_HIGH);
+    let k: number = Math.round(Math.log(ratio / mid) / Math.LN2);
+    const m: number = ratio / Math.pow(2, k);
+    if (m >= OCTAVE_HIGH) {
+      k += 1;
+    } else if (m < OCTAVE_LOW) {
+      k -= 1;
+    }
+    this.octaveMult = Math.pow(2, -k);
+    this.engine.setLevelBpm(raw * Math.pow(2, k));
+  }
+
   /** 把引擎快照拷进 @State（约 5Hz 调用） */
   private pullStatus(): void {
     const s: RunStatus = this.engine.status();
     this.posSecC = s.posSec;
     this.durSecC = s.durSec;
     this.speedC = s.speed;
-    this.songBpmC = s.songBpm;
+    this.songBpmC = s.songBpm;            // 层级后的 BPM（管线/拍网格用）
+    this.rawSongBpm = this.engine.getSongBpm();
+    this.levelSongBpm = s.songBpm;
     this.firstBeatC = s.firstBeat;
     this.modeC = s.mode;
     this.playingC = s.playing;
