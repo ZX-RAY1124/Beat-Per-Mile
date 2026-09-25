@@ -533,32 +533,43 @@ export struct CurveList {
               this.openSettings(-1);
             }
           })
+          if(this.CURVES.length > 0) {
 
-          ForEach(this.CURVES, (item: CurveData, index: number) => {
-            CurveCard({
-              title: item.title,
-              points: item.points,
-              pointX: item.pointX,
-              tagX: item.tagX,
-              lineColor: item.lineColor,
-              fillColor: item.fillColor,
-              accentColor: item.lineColor,
-              selected: this.selectedIndex === index + 1,
-              onSelect: () => {
-                this.select(index + 1);
-              },
-              onSettings: () => {
-                this.openSettings(index);
-              },
-              onTags: () => {
-                this.openTags(index);
-              },
-              onDelete: () => {
-                this.askDeleteCurve(index);
-              }
-            })
-            //键里带版本号：内容变了必须重建卡片，否则缩略图不刷新（见 listRevision 的注释）
-          }, (item: CurveData) => item.title + '#' + this.listRevision.toString())
+            ForEach(this.CURVES, (item: CurveData, index: number) => {
+              CurveCard({
+                title: item.title,
+                points: item.points,
+                pointX: item.pointX,
+                tagX: item.tagX,
+                lineColor: item.lineColor,
+                fillColor: item.fillColor,
+                accentColor: item.lineColor,
+                selected: this.selectedIndex === index + 1,
+                onSelect: () => {
+                  this.select(index + 1);
+                },
+                onSettings: () => {
+                  this.openSettings(index);
+                },
+                onTags: () => {
+                  this.openTags(index);
+                },
+                onDelete: () => {
+                  this.askDeleteCurve(index);
+                }
+              })
+              //键里带版本号：内容变了必须重建卡片，否则缩略图不刷新（见 listRevision 的注释）
+            }, (item: CurveData) => item.title + '#' + this.listRevision.toString())
+          } else {
+            Column(){
+              Text('还没有保存的曲线呢').fontSize(20).fontColor(Color.Grey)
+              Text('点击右上角"+"以新建曲线').fontSize(15).fontColor(Color.Grey)
+            }
+            .justifyContent(FlexAlign.Center)
+            .alignItems(HorizontalAlign.Center)
+            .height(400)
+            .width('80%')
+          }
 
 
           Blank().height(80).width("100%");

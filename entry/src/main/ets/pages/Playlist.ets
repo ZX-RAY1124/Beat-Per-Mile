@@ -227,27 +227,38 @@ export struct Playlist {
   build() {
     Scroll() {
       Column({ space: CARD_SPACE }) {
-        ForEach(this.PLAYLISTS, (item: PlaylistData, index: number) => {
-          PlaylistCard({
-            title: item.title,
-            coverColor: item.coverColor,
-            songCount: item.songCount,
-            accentColor: item.accentColor,
-            selected: this.selectedIndex === index,
-            onSelect: () => {
-              this.select(index);
-            },
-            onSettings: () => {
-              // 设置歌单（占位）
-              this.EditSongListColumn(index);
-            },
-            onDelete: () => {
-              // 删除歌单（占位）
-              this.showWarmDialog(index);
-            }
-          })
-        }, (item: PlaylistData) => item.title + '#' + this.listVision.toString())
-        Blank().width("100%").height(60)
+        if(this.PLAYLISTS.length > 0) {
+          ForEach(this.PLAYLISTS, (item: PlaylistData, index: number) => {
+            PlaylistCard({
+              title: item.title,
+              coverColor: item.coverColor,
+              songCount: item.songCount,
+              accentColor: item.accentColor,
+              selected: this.selectedIndex === index,
+              onSelect: () => {
+                this.select(index);
+              },
+              onSettings: () => {
+                // 设置歌单（占位）
+                this.EditSongListColumn(index);
+              },
+              onDelete: () => {
+                // 删除歌单（占位）
+                this.showWarmDialog(index);
+              }
+            })
+          }, (item: PlaylistData) => item.title + '#' + this.listVision.toString())
+          Blank().width("100%").height(60)
+        }  else  {
+        Column(){
+          Text('还没有保存的歌单呢').fontSize(20).fontColor(Color.Grey)
+          Text('点击右上角"+"以新建歌单').fontSize(15).fontColor(Color.Grey)
+        }
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .height(400)
+        .width('80%')
+      }
       }
       .width('100%')
       .padding({

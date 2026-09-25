@@ -117,7 +117,7 @@ struct MainPlayer {
   CARD_BORDER_TOP: number = 6;    // 左侧描边（选中时可见）
   CARD_BORDER_OTHER: number = 1.5; // 其余三边描边
   PAGE_BG: string = '#F5F6F8';
-  @State offset_bar: number = 0;
+  @State offset_bar: number = -20;
   @State gesture_start: number = 0;
 
   // ==================== 引擎 / 音频 / 主循环 ====================
@@ -211,6 +211,7 @@ struct MainPlayer {
   @State pipelineMultiplier: number = 1;
   @State pipelineState: number = 0;
   @State pipelineSteps: number = 0;
+  @State quit_progress: number = 0;
 
   // ==================== 摇杆 ====================
   @State rocker_offset: number = 0;
@@ -534,16 +535,38 @@ struct MainPlayer {
       .margin(5);
 
       Row({space:40}){
+        Stack(){
         Column(){
-         SymbolGlyph(this.Pauce_icon)
+         SymbolGlyph($r('sys.symbol.stop_circle_fill'))
            .fontSize(60)
            .fontColor([Color.White])
-        }.width(110).height(110).backgroundColor('#4ECDC4')
+        }.width(110).height(110).backgroundColor('#FF6B6B')
         .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
         .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.pause();
-        })
+       .gesture(
+         LongPressGesture({duration: 1, repeat: true})
+           .onAction((event: GestureEvent) => {
+             if(event.repeat) {
+               this.quit_progress += 0.5;
+               if(this.quit_progress === 100){
+                 this.Quit()
+               }
+             }
+           })
+           .onActionEnd(() => {
+             if(this.quit_progress < 100){
+               this.quit_progress = 0;
+             }
+           })
+       )
+        Progress({
+          value: this.quit_progress,
+          total: 100,
+          type: ProgressType.Ring
+        }).width(110).height(110).backgroundColor('#FF6B6B').enabled(false).color(Color.White)        // 描边宽度
+          // 进度描边颜色
+          }
+
       }.width("100%").justifyContent(FlexAlign.Center).offset({y:500}).zIndex(2)  //调整优先级
 
 
@@ -637,13 +660,7 @@ struct MainPlayer {
     .height("100%")
     .systemTransition(this.transition_type)
     .backgroundColor(this.PAGE_BG)
-    .onBackPressed(() => {
-      this.getUIContext().animateTo({curve: Curve.EaseInOut, duration:500},() => {
-        this.Button_1.unselect();
-        this.navPathStack.pop({})
-      })
-      return true;
-    })
+    .hideBackButton(true)
 
     .onReady((context: NavDestinationContext) => {
       this.navPathStack = context.pathStack;
@@ -689,13 +706,7 @@ struct MainPlayer {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
-  /** 用于将传递进来的关于 00:00 格式的字符串转换为 number[] 并输出 */
-  private TimeTransformMinSec(strTime: string): number[]{
-    const spliter = strTime.split(":");
-    const Min: number = Number(spliter[0]);
-    const Sec: number = Number(spliter[1]);
-    return [Min,Sec]
-  }
+
 
   /** 秒 → [小时,分,秒] */
   private secToHms(sec: number): number[] {
@@ -1310,6 +1321,15 @@ struct MainPlayer {
 
   // ==================== 主循环 / 状态刷新 ====================
 
+
+  private Quit(): void {
+    this.getUIContext().animateTo({curve: Curve.EaseInOut, duration:500},() => {
+      this.Button_1.unselect();
+      this.navPathStack.pop({})
+    })
+  }
+
+
   private startTick(): void {
     this.stopTick();
     this.lastTickMs = Date.now();
@@ -1467,95 +1487,14 @@ struct MainPlayer {
     }
   }
 
-  // ==================== 旧版计时器（已恢复启用） ====================
-  // TimeGoLogic* / startTimeProgress* / Progress 都是原实现。
-  // 现在「运动时间 / 歌曲时间」由引擎驱动，所以 startTimeProgress / startTimeProgressSongLeft 不再启动；
-  // 进度环这一路保留每秒轮询（startTimeProgressSongRight），角度改用引擎真实位置求（见该函数）。
-
-  private TimeGoLogic(direction: number, Min: number, Sec: number): number[] {
-    if(direction === 0){
-    if(Sec === 0){
-      Sec = 60;
-      Min -= 1;
-    }
-    Sec -= 1;
-    return [Min,Sec]
-    } else if (direction === 1){
-      if(Sec === 59){
-        Sec = 0;
-        Min += 1;
-      }
-      Sec += 1
-      return [Min,Sec]
-
-    } else {
-      console.error("[TimeGoLogic]direction读取错误")
-      return []
-    }
-
-  }
-
-  private TimeGoLogicHour(direction: number, Hour: number ,Min: number, Sec: number): number[] {
-    if(direction === 0){
-      if(Min === 0){
-        Hour -= 1;
-        Min = 59;
-        return [Hour,Min,Sec]
-
-      }
-
-      if(Sec === 0){
-        Sec = 59;
-        Min -= 1;
-        return [Hour,Min,Sec]
-
-      }
-      Sec -= 1;
-      return [Hour,Min,Sec]
-    } else if (direction === 1){
-
-      if(Min === 59){
-        Hour += 1;
-        Min = 0;
-        return [Hour,Min,Sec]
-
-      }
-      if(Sec === 59){
-        Sec = 0;
-        Min += 1;
-        return [Hour,Min,Sec]
-
-      }
-      Sec += 1
-      return [Hour,Min,Sec]
-
-
-    } else {
-      console.error("[TimeGoLogic]direction读取错误")
-      return []
-    }
-
-  }
 
 
   private Progress(PerStep: number): void{
     this.getUIContext().animateTo({duration: 300, curve: Curve.EaseInOut}, () => {
-      // console.log(this.rotate_angle.toString());   // 调试期每秒一条，太吵，先注释掉
       this.rotate_angle += PerStep;
     })
   }
 
-  private startTimeProgress(type:number, id_ : string){
-    let id : string = id_;
-    let intervalID = setInterval(() => {
-      if(!this.G_token || id === this.stop_token) {
-        this.stop_token = '';    //销毁令牌
-        clearInterval(intervalID);
-      }
-      this.sport_time = this.TimeGoLogicHour(type, this.sport_time[0], this.sport_time[1], this.sport_time[2])
-
-    }, 1000)
-  }
 
   private startTimeProgressSongRight(type:number, id_ : string){
     let id : string = id_;
@@ -1575,35 +1514,6 @@ struct MainPlayer {
   }
 
 
-  private startTimeProgressSongLeft(type:number, id_ : string){
-    let id : string = id_;
-    let intervalID = setInterval(() => {
-      if(!this.G_token || id === this.stop_token) {
-        this.stop_token = '';    //销毁令牌
-        clearInterval(intervalID);
-      }
-      if(!this.isPause) {
-        this.songTimeLast = this.TimeGoLogic(type, this.songTimeLast[0], this.songTimeLast[1])
-      }
-
-    }, 1000)
-  }
-
-  private NextSong(): void{
-
-  }
-  private FormalSong(): void {
-
-  }
-
-  private rockerLogic(distance: number, MaxLength: number): void {
-    let rate = distance / MaxLength;
-
-  }
-
-  private MoveBar(power: number): void{
-
-  }
 
   private onQuit(): void {
     this.G_token = false;
