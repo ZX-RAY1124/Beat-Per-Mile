@@ -182,6 +182,15 @@ static std::thread          g_stepThread;
 // 当前正在播的播放器（由 WorkerThread 用 RAII 注册/注销），供管线读歌曲位置做回填
 static std::atomic<LiveStretchPlayer*> g_livePlayer{nullptr};
 static std::atomic<int>     g_liveSampleRate{48000};
+// ─── 真实传感器源（S3）─────────────────────────────────────────────────
+//   与模拟线程互斥：g_sensorRunning 为真时由 ArkTS 订阅加速度计、攒批调
+//   stepSensorPush() 被动喂样，native 不起线程。
+static std::atomic<bool>    g_sensorRunning{false};
+static double               g_sensorT0Sec = 0.0;   // 真实源的墙钟起点（steady_clock 秒）
+static double               g_sensorLastX = 0.0;   // 最近一次样点（调试/日志用）
+static double               g_sensorLastY = 0.0;
+static double               g_sensorLastZ = 0.0;
+static double               g_sensorLastHz = 0.0;
 
 // ─── 原生播放状态（ArkTS 用 musicGetStatus() 查询）─────────────────────
 //   解决三件事：
@@ -1546,7 +1555,7 @@ static std::string stepStatusJson() {
     std::lock_guard<std::mutex> lk(g_stepMutex);
     const steprun::Status st = g_stepPipeline.status();
     std::ostringstream os;
-    os << "{\"running\":" << (g_stepRunning.load() ? "true" : "false")
+    os << "{\"running\":" << ((g_stepRunning.load() || g_sensorRunning.load()) ? "true" : "false")
        << ",\"cadenceSpm\":" << st.cadenceSpm
        << ",\"multiplier\":" << st.multiplier
        << ",\"targetBpm\":" << st.targetBpm
@@ -1660,6 +1669,7 @@ static napi_value stepPipelineSetChaseDelayWindow(napi_env env, napi_callback_in
 static napi_value stepPipelineStop(napi_env env, napi_callback_info info) {
     (void)env;
     (void)info;
+    g_sensorRunning.store(false);          // 真实源也一起停
     if (g_stepRunning.load()) {
         g_stepRunning.store(false);
         if (g_stepThread.joinable()) {
@@ -1687,6 +1697,158 @@ static napi_value stepPipelineStatus(napi_env env, napi_callback_info info) {
     napi_value out = nullptr;
     napi_create_string_utf8(env, s.c_str(), s.size(), &out);
     return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  S3：真实传感器源（被动喂样，native 不起线程）
+//    ArkTS 用 @kit.SensorServiceKit 订阅加速度计（m/s²，含重力），攒一批
+//    （~100ms）调 stepSensorPush()；这里复用同一条 StepDetector → TempoFollower 链路。
+//    ★ 与模拟源互斥；stepSensorStart 会先停掉模拟线程。
+// ════════════════════════════════════════════════════════════════════════
+
+/** 单调墙钟（秒）：真实源的时间基准，避免受系统时间调整影响 */
+static double steadyNowSec() {
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+/** 取一个 Float32Array 的数据指针与长度；不是 Float32Array / 为空则返回 false */
+static bool getF32(napi_env env, napi_value v, const float** out, size_t* len) {
+    napi_typedarray_type type = napi_float32_array;
+    size_t l = 0;
+    void*  d = nullptr;
+    napi_value ab = nullptr;
+    size_t off = 0;
+    if (napi_get_typedarray_info(env, v, &type, &l, &d, &ab, &off) != napi_ok) {
+        return false;
+    }
+    if (type != napi_float32_array || d == nullptr || l == 0) {
+        return false;
+    }
+    *out = static_cast<const float*>(d);
+    *len = l;
+    return true;
+}
+
+/**
+ * stepSensorStart(songBpm, firstBeatSec, mode, targetBpm)
+ *   配置真实源管线并进入"被动喂样"状态；不创建模拟线程。
+ */
+static napi_value stepSensorStart(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    double  songBpm = 150.0;
+    double  firstBeat = 0.0;
+    int32_t mode = 0;
+    double  targetBpm = 0.0;
+    if (argc >= 1) napi_get_value_double(env, args[0], &songBpm);
+    if (argc >= 2) napi_get_value_double(env, args[1], &firstBeat);
+    if (argc >= 3) napi_get_value_int32(env, args[2], &mode);
+    if (argc >= 4) napi_get_value_double(env, args[3], &targetBpm);
+
+    // 模拟线程与真实源互斥
+    if (g_stepRunning.load()) {
+        g_stepRunning.store(false);
+        if (g_stepThread.joinable()) {
+            g_stepThread.join();
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_stepMutex);
+        // 顺序与 stepPipelineStart 一致：先选控制律（会清相位）→ 重置 → 设歌 → 规定步频
+        g_stepPipeline.setMode(mode);
+        g_stepPipeline.reset();
+        g_stepPipeline.setSong(songBpm, firstBeat);
+        g_stepPipeline.setPresetTargetBpm(targetBpm);
+    }
+    g_sensorT0Sec = steadyNowSec();
+    g_sensorRunning.store(true);
+    OH_LOG_INFO(LOG_APP, "[step] sensor source started: mode=%{public}d songBpm=%{public}.1f "
+                         "firstBeat=%{public}.2f targetBpm=%{public}.1f",
+                mode, songBpm, firstBeat, targetBpm);
+    return nullptr;
+}
+
+/**
+ * stepSensorPush(ax, ay, az, rateHz)
+ *   一批等长 Float32Array（单位 m/s²，含重力）。时间戳按
+ *   "批次到达时刻 − (n−1−i)/rateHz" 回填，这样 NAPI 批次抖动不影响单个样点。
+ */
+static napi_value stepSensorPush(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 4 || !g_sensorRunning.load()) {
+        return nullptr;
+    }
+
+    const float* ax = nullptr;
+    const float* ay = nullptr;
+    const float* az = nullptr;
+    size_t nx = 0, ny = 0, nz = 0;
+    if (!getF32(env, args[0], &ax, &nx) ||
+        !getF32(env, args[1], &ay, &ny) ||
+        !getF32(env, args[2], &az, &nz)) {
+        return nullptr;
+    }
+    size_t n = nx;
+    if (ny < n) n = ny;
+    if (nz < n) n = nz;
+
+    double rateHz = 50.0;
+    napi_get_value_double(env, args[3], &rateHz);
+    if (!(rateHz > 1.0) || n == 0) {
+        return nullptr;
+    }
+
+    const double now = steadyNowSec() - g_sensorT0Sec;
+
+    // 歌曲位置：从"当前在播的播放器"读真实输入位置（没有在播就是 0）
+    double songSec = 0.0;
+    LiveStretchPlayer* pl = g_livePlayer.load(std::memory_order_acquire);
+    const int sr = g_liveSampleRate.load(std::memory_order_relaxed);
+    if (pl != nullptr && sr > 0) {
+        songSec = static_cast<double>(pl->getInputPosition()) / static_cast<double>(sr);
+    }
+
+    steprun::Status st;
+    {
+        std::lock_guard<std::mutex> lk(g_stepMutex);
+        g_stepPipeline.sampleSongClock(now, songSec);
+        for (size_t i = 0; i < n; ++i) {
+            const double t = now - static_cast<double>(n - 1 - i) / rateHz;
+            g_stepPipeline.pushSample(ax[i], ay[i], az[i], t);
+        }
+        st = g_stepPipeline.status();
+        g_speed.store(st.multiplier, std::memory_order_relaxed);
+    }
+
+    g_sensorLastX = ax[n - 1];
+    g_sensorLastY = ay[n - 1];
+    g_sensorLastZ = az[n - 1];
+    g_sensorLastHz = rateHz;
+    static std::atomic<int> pushCount{0};
+    if ((pushCount.fetch_add(1) % 25) == 0) {
+        OH_LOG_INFO(LOG_APP, "[step] sensor: ax=%{public}.3f ay=%{public}.3f az=%{public}.3f "
+                             "hz=%{public}.1f cadence=%{public}.1f steps=%{public}llu mult=%{public}.3f",
+                    g_sensorLastX, g_sensorLastY, g_sensorLastZ, rateHz,
+                    st.cadenceSpm, static_cast<unsigned long long>(st.steps), st.multiplier);
+    }
+    return nullptr;
+}
+
+static napi_value stepSensorStop(napi_env env, napi_callback_info info) {
+    (void)env;
+    (void)info;
+    g_sensorRunning.store(false);
+    {
+        std::lock_guard<std::mutex> lk(g_stepMutex);
+        g_stepPipeline.reset();
+    }
+    OH_LOG_INFO(LOG_APP, "[step] sensor source stopped");
+    return nullptr;
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1853,6 +2015,10 @@ static napi_value Init(napi_env env, napi_value exports)
         {"stepPipelineSetTargetBpm", nullptr, stepPipelineSetTargetBpm, nullptr, nullptr, nullptr, napi_default, nullptr},
         // 动态模式起步延迟校正窗口（秒）：窗口内 CHASE 不调速度，只平移 perfect 窗口
         {"stepPipelineSetChaseDelayWindow", nullptr, stepPipelineSetChaseDelayWindow, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // ★ S3：真实传感器源（被动喂样）
+        {"stepSensorStart", nullptr, stepSensorStart, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stepSensorPush", nullptr, stepSensorPush, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"stepSensorStop", nullptr, stepSensorStop, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ★ 原生播放状态：加载中/就绪/失败 + 真实歌曲位置
         {"musicGetStatus", nullptr, musicGetStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
     };

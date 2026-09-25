@@ -27,9 +27,12 @@ import {
   stepPipelineSetChaseDelayWindow,
   stepPipelineStart,
   stepPipelineStatus,
-  stepPipelineStop
+  stepPipelineStop,
+  stepSensorStart,
+  stepSensorStop
 } from 'libentry.so';
-import { SOURCE_SIM, STEP_SCENARIOS, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
+import { SOURCE_REAL, SOURCE_SIM, STEP_SCENARIOS, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
+import { stepSensor } from '../ets_libs/StepSensor';
 
 /**
  * 跑步电台 · 播放器页（可演示版）
@@ -1347,9 +1350,6 @@ struct Player {
     if (this.pipelineOn) {
       return;
     }
-    if (this.stepSource !== SOURCE_SIM) {
-      return;                      // 真实传感器尚未接线
-    }
     if (this.mode !== MODE_DYNAMIC) {
       // ★ 产品决策：恒速/曲线是**完全开环** —— 音乐按规定倍速播，是节拍基准，
       //   不读步频、不做相位对齐，用户自己跟音乐跑。所以只有动态模式才需要管线。
@@ -1360,23 +1360,33 @@ struct Player {
       // 起步延迟校正窗口（算法参数设置里配的；0 = 关闭）：
       // 窗口内 CHASE 只平移 perfect 窗口、不改歌曲速度，过后自动回到相位调整。
       stepPipelineSetChaseDelayWindow(getChaseDelaySec());
-      stepPipelineStart(this.stepScenario, this.songBpm, this.firstBeat, 0, 0.0);
+      if (this.stepSource === SOURCE_REAL) {
+        // 真实加速度计：native 不起模拟线程，由 StepSensor 订阅后攒批喂进来
+        stepSensorStart(this.songBpm, this.firstBeat, 0, 0.0);
+        if (!stepSensor.start()) {
+          stepSensorStop();
+          return;
+        }
+      } else {
+        stepPipelineStart(this.stepScenario, this.songBpm, this.firstBeat, 0, 0.0);
+      }
       this.pipelineOn = true;
       this.pipelineCadence = 0;
       this.pipelineMultiplier = 1;
       this.pipelineState = 0;
       this.pipelineSteps = 0;
     } catch (e) {
-      console.error('stepPipelineStart 失败：' + JSON.stringify(e));
+      console.error('startPipeline 失败：' + JSON.stringify(e));
     }
   }
 
   private stopPipeline(): void {
+    stepSensor.stop();             // 真实源：先退订；模拟源下是空操作
     if (!this.pipelineOn) {
       return;
     }
     try {
-      stepPipelineStop();
+      stepPipelineStop();          // native 侧同时会清掉真实源标志
     } catch (e) {
       console.error('stepPipelineStop 失败：' + JSON.stringify(e));
     }
