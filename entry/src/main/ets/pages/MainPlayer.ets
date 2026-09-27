@@ -157,6 +157,10 @@ struct MainPlayer {
   /** 分析出的原始歌曲 BPM / 选定层级后的 BPM（歌曲信息栏显示成 原始（层级）） */
   @State rawSongBpm: number = 0;
   @State levelSongBpm: number = 0;
+  /** 恒速模式的目标步频（预设 + 未选曲线时显示滑块；默认取引擎的规定步频） */
+  @State constBpmUi: number = 170;
+  /** 是否显示恒速目标步频滑块（= 引擎当前处于 MODE_CONSTANT） */
+  @State showConstSlider: boolean = false;
   @State floatBarLROffset: number = 0;
 
   // ==================== 内部标量 ====================
@@ -234,6 +238,7 @@ struct MainPlayer {
     this.ctx = c;
     this.G_token = true;      // 重进页面时重新激活轮询令牌
     this.stop_token = '';
+    this.constBpmUi = this.engine.getConstBpm();   // 恒速滑块初值 = 引擎规定步频
 
     try {
       window.getLastWindow(this.getUIContext().getHostContext())        //获取窗口大小
@@ -322,6 +327,56 @@ struct MainPlayer {
     .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
     .margin(5);
   }
+  // ==================== 恒速模式：目标步频滑块 ====================
+
+  /**
+   * 只在「预设 + 未选曲线（MODE_CONSTANT）」时出现，位置在歌曲信息卡正下方。
+   * ★ 必须是不带参数的 @Builder：带参 @Builder 按值传参时内容会被"冻"在首帧。
+   * 拖动改的是引擎的规定步频 constBpm，倍速 = 目标步频 ÷ 层级BPM，随拖动连续变化。
+   */
+  @Builder
+  ConstBpmSlider() {
+    Column({ space: 4 }) {
+      Row() {
+        Text('目标步频').fontSize(13).fontColor('#8A8F99')
+        Blank()
+        Text(this.constBpmUi.toFixed(0) + ' BPM').fontSize(13).fontColor('#1B1B2F')
+      }
+      .width('100%')
+
+      Slider({
+        value: this.constBpmUi,
+        min: 120,
+        max: 220,
+        step: 1,
+        style: SliderStyle.OutSet
+      })
+        .width('100%')
+        .trackColor('#E4E6EE')
+        .selectedColor(this.G_COLOR)
+        .blockColor(Color.White)
+        .onChange((value: number) => {
+          this.constBpmUi = Math.round(value);
+          this.engine.setConstBpm(this.constBpmUi);
+        })
+
+      Text('倍速 = ' + this.constBpmUi.toFixed(0) + ' ÷ ' + this.levelSongBpm.toFixed(0)
+        + ' = x' + (this.levelSongBpm > 0 ? (this.constBpmUi / this.levelSongBpm) : 1).toFixed(2))
+        .fontSize(10)
+        .fontColor('#C4C8D0')
+        .width('100%')
+    }
+    .width(250)
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .borderRadius(14)
+    .backgroundColor(Color.White)
+    .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
+    .borderColor(this.G_COLOR)
+    .borderWidth(1)
+    .position({ x: 25, y: 500 })
+    .zIndex(2)     // ★ 必须高于后面那个 100%×100% 的 Column，否则触摸会被它吃掉（同暂停按钮的处理）
+  }
+
   callback: Callback<motion.HoldingHandStatus> = (data: motion.HoldingHandStatus) => {
     if(data === 2 || data === 0 || data === 16)
       this.floatBarLROffset = 0
@@ -610,6 +665,11 @@ struct MainPlayer {
 
 
       this.Song_Column()
+
+      // 恒速（预设 + 未选曲线）：歌曲信息下方给一根目标步频滑块
+      if (this.showConstSlider) {
+        this.ConstBpmSlider()
+      }
 
 
 
@@ -1495,6 +1555,7 @@ struct MainPlayer {
     this.levelSongBpm = s.songBpm;
     this.firstBeatC = s.firstBeat;
     this.modeC = s.mode;
+    this.showConstSlider = (s.mode === MODE_CONSTANT);   // 只有恒速才给滑块
     this.playingC = s.playing;
 
     let bpmShow: number = s.targetBpm;
