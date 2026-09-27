@@ -942,6 +942,43 @@ static OH_AudioRenderer* rendererForId(int id) {
 }
 
 /**
+ * ★ 按 id **安全地**操作渲染器：查表与 OH_* 调用在**同一把锁**里完成。
+ *
+ * 为什么非这样不可（真机崩溃根因）：
+ *   rendererForId() 是"加锁查表 → 解锁 → 返回裸指针"。调用方拿到指针时锁早就放了，
+ *   而 WorkerThread 在曲末/取消/解码失败时会走 clear()：
+ *       { 加锁; g_downloadMap.erase(id); }             // 表里摘掉
+ *       OH_AudioRenderer_Release(renderer);            // 锁外真释放
+ *   两个线程一交错就是：JS 拿到指针 → clear() 把对象析构掉 → JS 调
+ *   OH_AudioRenderer_SetVolumeWithRamp()/Pause()/Flush() 打在已释放内存上。
+ *   实测崩溃栈：JS(napi) → libentry.so → SetVolumeWithRamp → 在 ld-musl 里 SIGSEGV，
+ *   rax 是垃圾值，其它线程正停在 RendererInClientInner 的析构上。
+ *
+ * 现在调用期间**一直持锁**：
+ *   · clear() 的 erase 必须等我们这次调用返回，所以 Release() 永远排在最后一次调用之后；
+ *   · erase 一旦发生，之后任何查找都拿不到指针 —— 新调用直接返回 false（什么都不做）。
+ * ⚠️ 音频回调线程（OnWriteData / OnError）不碰 g_mapMutex，所以持锁调用不会死锁；
+ *    也正因为如此，**不要**把这个锁跨到 pl->seekTo() 那种长操作上（会和 WorkerThread 的
+ *    播放器锁形成 AB-BA）。
+ *
+ * @return 会话还在且真的调用了 fn 返回 true；会话已结束返回 false（调用方按"忽略"处理）
+ */
+template <typename Fn>
+static bool withRendererLocked(int id, Fn fn) {
+    std::lock_guard<std::mutex> lock(g_mapMutex);
+    auto it = g_downloadMap.find(id);
+    if (it == g_downloadMap.end()) {
+        return false;
+    }
+    OH_AudioRenderer* r = it->second->renderer;
+    if (r == nullptr) {
+        return false;
+    }
+    fn(r);          // ★ 持锁调用
+    return true;
+}
+
+/**
  * 发"起播"信号给某个会话 —— native 侧唯一的起播入口。
  * 三件事必须一起做，少一件都会出问题：
  *   ① 置位 startRequested（准备线程的谓词）
@@ -1261,9 +1298,9 @@ static napi_value musicPause(napi_env env, napi_callback_info info){
     int id;
     napi_get_value_int32(env, args[0], &id);
     
-    if (OH_AudioRenderer* r = rendererForId(id)) {          //暂停音频
+    withRendererLocked(id, [](OH_AudioRenderer* r) {        //暂停音频
         OH_AudioRenderer_Pause(r);
-    }
+    });
     
     std::lock_guard<std::mutex> lock(g_mapMutex);
     auto it = g_downloadMap.find(id);
@@ -1297,9 +1334,9 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
     g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);
 
     // 最后启动 AudioRenderer（此时环形缓冲区已有数据，避免 underrun）
-    if (OH_AudioRenderer* r = rendererForId(id)) {
+    withRendererLocked(id, [](OH_AudioRenderer* r) {
         OH_AudioRenderer_Start(r);
-    }
+    });
     
     return nullptr;
 }
@@ -1327,10 +1364,10 @@ static napi_value musicSeek(napi_env env, napi_callback_info info) {
         return nullptr;
     }
 
-    OH_AudioRenderer* r = rendererForId(id);
-    if (r != nullptr) {
-        OH_AudioRenderer_Pause(r);          // 停消费端
-    }
+    // ★ 停消费端：查表+调用同一把锁（会话随时可能被 clear() 释放）
+    withRendererLocked(id, [](OH_AudioRenderer* r) {
+        OH_AudioRenderer_Pause(r);
+    });
 
     // ★ 告诉播放循环"正在 seek，别做结束判定"：
     //   seekTo() 会 stop() 音频线程（running_ 变 false），回调也随之停止，
@@ -1343,18 +1380,20 @@ static napi_value musicSeek(napi_env env, napi_callback_info info) {
     // seek 期间没有回调，刷新时间基准，免得恢复瞬间被 500ms 兜底判据误判
     g_lastCallbackMs.store(nowMs(), std::memory_order_relaxed);
 
-    if (r != nullptr) {
-        // ★ 关键：丢掉音频服务里**已经排队**的那一段（约等于一次回调的量，~93ms）。
-        //   Pause 只是"停住"，Start 之后服务会先把这段**旧位置**的数据吐出来 ——
-        //   听感就是"先响一小段拖动前的音频，才到新位置"。
-        //   我们清的是自己那份环形缓冲，管不到服务内部的队列，所以必须 Flush。
+    // ★ 关键：丢掉音频服务里**已经排队**的那一段（约等于一次回调的量，~93ms）。
+    //   Pause 只是"停住"，Start 之后服务会先把这段**旧位置**的数据吐出来 ——
+    //   听感就是"先响一小段拖动前的音频，才到新位置"。
+    //   我们清的是自己那份环形缓冲，管不到服务内部的队列，所以必须 Flush。
+    // ★ 这里重新查一次表，而不是沿用上面那个裸指针：seekTo() 期间会话可能被 clear()
+    //   释放掉（裸指针就悬空了）。查不到就什么都不做 —— 正是想要的语义。
+    withRendererLocked(id, [](OH_AudioRenderer* r) {
         const OH_AudioStream_Result fr = OH_AudioRenderer_Flush(r);
         if (fr != AUDIOSTREAM_SUCCESS) {
             OH_LOG_WARN(LOG_APP, "[play] seek: Flush 返回 %{public}d（非 0 = 旧数据没清掉）",
                         static_cast<int>(fr));
         }
         OH_AudioRenderer_Start(r);          // 重新开始消费
-    }
+    });
 
     OH_LOG_INFO(LOG_APP, "[play] seek -> %{public}.3fs (frame=%{public}lld) %{public}s",
                 sec, frame, ok ? "OK" : "FAILED");
@@ -1402,18 +1441,22 @@ static napi_value musicSetVolume(napi_env env, napi_callback_info info) {
     if (argc >= 2) napi_get_value_double(env, args[1], &volume);
     if (argc >= 3) napi_get_value_int32(env, args[2], &rampMs);
 
-    OH_AudioRenderer* r = rendererForId(id);
-    if (r == nullptr) {
-        return nullptr;
-    }
     if (volume < 0.0) volume = 0.0;
     if (volume > 1.0) volume = 1.0;
 
-    const OH_AudioStream_Result res = (rampMs > 0)
-        ? OH_AudioRenderer_SetVolumeWithRamp(r, static_cast<float>(volume), rampMs)
-        : OH_AudioRenderer_SetVolume(r, static_cast<float>(volume));
-    OH_LOG_INFO(LOG_APP, "[play] volume id=%{public}d v=%{public}.3f ramp=%{public}dms -> %{public}d",
-                id, volume, rampMs, static_cast<int>(res));
+    // ★ 查表与调用同一把锁：会话被 clear() 释放的那一瞬间不能插进来（见 withRendererLocked）
+    const double v    = volume;
+    const int    ramp = rampMs;
+    const bool ok = withRendererLocked(id, [v, ramp, id](OH_AudioRenderer* r) {
+        const OH_AudioStream_Result res = (ramp > 0)
+            ? OH_AudioRenderer_SetVolumeWithRamp(r, static_cast<float>(v), ramp)
+            : OH_AudioRenderer_SetVolume(r, static_cast<float>(v));
+        OH_LOG_INFO(LOG_APP, "[play] volume id=%{public}d v=%{public}.3f ramp=%{public}dms -> %{public}d",
+                    id, v, ramp, static_cast<int>(res));
+    });
+    if (!ok) {      // 会话已经结束了：静默忽略，绝不能再碰那个渲染器
+        OH_LOG_WARN(LOG_APP, "[play] volume ignored: id=%{public}d 会话已结束", id);
+    }
     return nullptr;
 }
 
@@ -1427,9 +1470,9 @@ static napi_value musicCancel(napi_env env, napi_callback_info info) {          
     int id;
  
     napi_get_value_int32(env, args[0], &id);
-    if (OH_AudioRenderer* r = rendererForId(id)) {          //结束播放
+    withRendererLocked(id, [](OH_AudioRenderer* r) {        //结束播放
         OH_AudioRenderer_Stop(r);
-    }
+    });
 
 
     TsfnContext* dead = nullptr;
