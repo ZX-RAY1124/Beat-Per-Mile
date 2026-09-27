@@ -14,6 +14,7 @@ import {
   MODE_CONSTANT,
   MODE_CURVE,
   MODE_DYNAMIC,
+  CurveStage,
   RunDemoEngine,
   RunStatus,
   SongEntry,
@@ -161,6 +162,12 @@ struct MainPlayer {
   @State constBpmUi: number = 170;
   /** 是否显示恒速目标步频滑块（= 引擎当前处于 MODE_CONSTANT） */
   @State showConstSlider: boolean = false;
+  /** 曲线模式的「下一节拍点」预告（= 引擎当前处于 MODE_CURVE），与滑块共用同一个位置 */
+  @State showCurvePreview: boolean = false;
+  @State cvNextBpm: number = 0;      // 下一个曲线节点的目标 BPM
+  @State cvNextInSec: number = 0;    // 距离下一个节点还有多少秒（按运动时间）
+  @State cvProg: number = 0;         // 本段进度 0~1（上一个节点 → 下一个节点）
+  @State cvDone: boolean = false;    // 曲线已经走完（后面没有节点了）
   @State floatBarLROffset: number = 0;
 
   // ==================== 内部标量 ====================
@@ -327,44 +334,78 @@ struct MainPlayer {
     .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
     .margin(5);
   }
-  // ==================== 恒速模式：目标步频滑块 ====================
+  // ==================== 速度卡：恒速滑块 / 曲线预告（共用一个框） ====================
 
   /**
-   * 只在「预设 + 未选曲线（MODE_CONSTANT）」时出现，位置在歌曲信息卡正下方。
+   * 歌曲信息卡正下方那块小卡片。**恒速和曲线共用这一个框**，只换里面的内容：
+   *   · 恒速（MODE_CONSTANT）：一根目标步频滑块，拖动即改引擎的规定步频，
+   *     倍速 = 目标步频 ÷ 层级BPM，随拖动连续变化；
+   *   · 曲线（MODE_CURVE）  ：下一节拍点预告（下一节点 BPM + 倒计时 + 本段进度）。
+   * 两者互斥：恒速是给人拖的，曲线拖不了，就把这个位置让给「接下来会变成多少」。
+   *
+   * ★ 框只写一次：宽 250 / 多高自适应 / 位置 x25,y500；要挪位置或改样式只动下面那组属性。
    * ★ 必须是不带参数的 @Builder：带参 @Builder 按值传参时内容会被"冻"在首帧。
-   * 拖动改的是引擎的规定步频 constBpm，倍速 = 目标步频 ÷ 层级BPM，随拖动连续变化。
    */
   @Builder
-  ConstBpmSlider() {
-    Column({ space: 4 }) {
-      Row() {
-        Text('目标步频').fontSize(13).fontColor('#8A8F99')
-        Blank()
-        Text(this.constBpmUi.toFixed(0) + ' BPM').fontSize(13).fontColor('#1B1B2F')
-      }
-      .width('100%')
-
-      Slider({
-        value: this.constBpmUi,
-        min: 120,
-        max: 220,
-        step: 1,
-        style: SliderStyle.OutSet
-      })
+  SpeedCard() {
+    Column({ space: 6 }) {
+      if (this.showConstSlider) {
+        // ---- 恒速：目标步频滑块 ----
+        Row() {
+          Text('目标步频').fontSize(13).fontColor('#8A8F99')
+          Blank()
+          Text(this.constBpmUi.toFixed(0) + ' BPM').fontSize(13).fontColor('#1B1B2F')
+        }
         .width('100%')
-        .trackColor('#E4E6EE')
-        .selectedColor(this.G_COLOR)
-        .blockColor(Color.White)
-        .onChange((value: number) => {
-          this.constBpmUi = Math.round(value);
-          this.engine.setConstBpm(this.constBpmUi);
+
+        Slider({
+          value: this.constBpmUi,
+          min: 120,
+          max: 220,
+          step: 1,
+          style: SliderStyle.OutSet
         })
+          .width('100%')
+          .trackColor('#E4E6EE')
+          .selectedColor(this.G_COLOR)
+          .blockColor(Color.White)
+          .onChange((value: number) => {
+            this.constBpmUi = Math.round(value);
+            this.engine.setConstBpm(this.constBpmUi);
+          })
 
-      Text('倍速 = ' + this.constBpmUi.toFixed(0) + ' ÷ ' + this.levelSongBpm.toFixed(0)
-        + ' = x' + (this.levelSongBpm > 0 ? (this.constBpmUi / this.levelSongBpm) : 1).toFixed(2))
-        .fontSize(10)
-        .fontColor('#C4C8D0')
+        Text('倍速 = ' + this.constBpmUi.toFixed(0) + ' ÷ ' + this.levelSongBpm.toFixed(0)
+          + ' = x' + (this.levelSongBpm > 0 ? (this.constBpmUi / this.levelSongBpm) : 1).toFixed(2))
+          .fontSize(10)
+          .fontColor('#C4C8D0')
+          .width('100%')
+      } else {
+        // ---- 曲线：只报「下一个节点」（倒计时/进度都走运动时间，暂停时跟着冻住）----
+        Row() {
+          Text('下一节拍点').fontSize(13).fontColor('#8A8F99')
+          Blank()
+          if (this.cvDone) {
+            Text('曲线已走完').fontSize(12).fontColor('#8A8F99')
+          } else {
+            Text(this.etaText(this.cvNextInSec)).fontSize(13).fontColor(this.G_COLOR)
+          }
+        }
         .width('100%')
+
+        Row() {
+          Text(this.cvNextBpm.toFixed(0)).fontSize(24).fontWeight(FontWeight.Medium).fontColor('#1B1B2F')
+          Text(' BPM').fontSize(12).fontColor('#8A8F99').margin({ left: 2, bottom: 3 })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Bottom)
+
+        // 本段进度：上一个节点 → 下一个节点
+        Progress({ value: this.cvProg * 100, total: 100, type: ProgressType.Linear })
+          .width('100%')
+          .color(this.G_COLOR)
+          .backgroundColor('#E4E6EE')
+          .style({ strokeWidth: 7 })
+      }
     }
     .width(250)
     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
@@ -666,9 +707,9 @@ struct MainPlayer {
 
       this.Song_Column()
 
-      // 恒速（预设 + 未选曲线）：歌曲信息下方给一根目标步频滑块
-      if (this.showConstSlider) {
-        this.ConstBpmSlider()
+      // 速度卡（恒速滑块 / 曲线下一节拍点预告）：同一个框，按模式换内容
+      if (this.showConstSlider || this.showCurvePreview) {
+        this.SpeedCard()
       }
 
 
@@ -1556,6 +1597,10 @@ struct MainPlayer {
     this.firstBeatC = s.firstBeat;
     this.modeC = s.mode;
     this.showConstSlider = (s.mode === MODE_CONSTANT);   // 只有恒速才给滑块
+    this.showCurvePreview = (s.mode === MODE_CURVE);     // 曲线则在同一位置给「下一节拍点」预告
+    if (this.showCurvePreview) {
+      this.refreshCurvePreview(s.workoutSec);
+    }
     this.playingC = s.playing;
 
     let bpmShow: number = s.targetBpm;
@@ -1575,6 +1620,53 @@ struct MainPlayer {
     if (!s.playing) {
       this.statusText = '暂停';
     }
+  }
+
+  /**
+   * 曲线模式的「下一节拍点」：**只取下一个节点**。
+   *   · 倒计时 / 进度都走**运动时间**（workoutSec），所以暂停时它会跟着冻住；
+   *   · 进度条的区间 = 上一个节点 → 下一个节点（第一个节点之前从 0 起算）；
+   *   · 曲线走完（最后一个节点之后）就报「曲线已走完」，此时速度恒定保持最后一档。
+   */
+  private refreshCurvePreview(workoutSec: number): void {
+    const st: CurveStage[] = this.engine.getStages();
+    if (st.length === 0) {
+      this.showCurvePreview = false;   // 没曲线（理论上不会是 MODE_CURVE）就不显示
+      return;
+    }
+    const last: CurveStage = st[st.length - 1];
+    let nx: number = -1;
+    for (let i: number = 0; i < st.length; i++) {
+      if (st[i].atSec > workoutSec + 0.001) {
+        nx = i;
+        break;
+      }
+    }
+    if (nx < 0) {
+      // 后面没有节点了：要么正站在最后一个节点上，要么曲线已经走完
+      this.cvNextBpm = last.bpm;
+      this.cvNextInSec = Math.max(0, last.atSec - workoutSec);
+      this.cvProg = 1;
+      this.cvDone = (workoutSec > last.atSec + 0.5);
+      return;
+    }
+    const prevAt: number = (nx > 0) ? st[nx - 1].atSec : 0;
+    const span: number = st[nx].atSec - prevAt;
+    let p: number = (span > 0) ? (workoutSec - prevAt) / span : 0;
+    if (p < 0) { p = 0; }
+    if (p > 1) { p = 1; }
+    this.cvDone = false;
+    this.cvNextBpm = st[nx].bpm;
+    this.cvNextInSec = st[nx].atSec - workoutSec;
+    this.cvProg = p;
+  }
+
+  /** 预告栏的倒计时文案：10 秒内给到 0.1s，久了就只报整秒 */
+  private etaText(sec: number): string {
+    if (sec >= 10) {
+      return sec.toFixed(0) + 's 后';
+    }
+    return sec.toFixed(1) + 's 后';
   }
 
   private updateStatusText(): void {
