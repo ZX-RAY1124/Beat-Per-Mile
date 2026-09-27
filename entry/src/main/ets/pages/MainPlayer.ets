@@ -3,6 +3,7 @@ import { Center_Button } from '../ets_libs/Button';
 import { EllipseShape, window } from '@kit.ArkUI';
 import { display } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import { BusinessError, Callback, SuppressWarnings, SuppressWarningsType } from '@kit.BasicServicesKit';
 import {
   SongJSON,
   SongListJSON,
@@ -41,6 +42,7 @@ import {
 import { SOURCE_REAL, SOURCE_SIM, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
 import { stepSensor } from '../ets_libs/StepSensor';
 import { MainPlayerParam } from '../ets_libs/PlayerRouteParam';
+import motion from '@ohos.multimodalAwareness.motion';
 
 /**
  * MainPlayer.ets —— 正式播放器
@@ -155,6 +157,7 @@ struct MainPlayer {
   /** 分析出的原始歌曲 BPM / 选定层级后的 BPM（歌曲信息栏显示成 原始（层级）） */
   @State rawSongBpm: number = 0;
   @State levelSongBpm: number = 0;
+  @State floatBarLROffset: number = 0;
 
   // ==================== 内部标量 ====================
   private posSecC: number = 0;
@@ -319,34 +322,67 @@ struct MainPlayer {
     .shadow({ radius: 24, color: "#2E000000", offsetX: 6, offsetY: 10 })
     .margin(5);
   }
+  callback: Callback<motion.HoldingHandStatus> = (data: motion.HoldingHandStatus) => {
+    if(data === 2 || data === 0 || data === 16)
+      this.floatBarLROffset = 0
+    if(data === 1)
+      this.floatBarLROffset = this.windowWidth;
+  }
 
-  @Builder FloatWidgetBuild(){
-    Column(){
-      Column({space:10}){
-        SideButton({ icon: $r('sys.symbol.forward_end_fill'), onTap: () => { this.nextSong() } });
-        SideButton({ icon: this.Pauce_icon, onTap: () => { this.pause() } });
-        SideButton({ icon: $r('sys.symbol.backward_end_fill'), onTap: () => { this.prevSong() } });
+  @SuppressWarnings({ rules: [SuppressWarningsType.PERMISSION] })
+  @Builder
+  FloatWidgetBuild() {
+    Column() {
+      Column({ space: 10 }) {
+        SideButton({
+          icon: $r('sys.symbol.forward_end_fill'), onTap: () => {
+            this.nextSong()
+          }
+        });
+        SideButton({
+          icon: this.Pauce_icon, onTap: () => {
+            this.pause()
+          }
+        });
+        SideButton({
+          icon: $r('sys.symbol.backward_end_fill'), onTap: () => {
+            this.prevSong()
+          }
+        });
         this.rocker_Build();
       }
-        .width(60)
-        .height(400)
-        .borderRadius(15)
-        .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
-        .alignItems(HorizontalAlign.Center)
-        .justifyContent(FlexAlign.Center)
+      .width(60)
+      .height(400)
+      .borderRadius(15)
+      .shadow({
+        radius: 12,
+        color: '#33000000',
+        offsetX: 0,
+        offsetY: 4
+      })
+      .alignItems(HorizontalAlign.Center)
+      .justifyContent(FlexAlign.Center)
 
-    }.position({right:0, top:this.offset_bar})
+    }.position({ right: this.floatBarLROffset, top: this.offset_bar })
 
-    .gesture(PanGesture({direction:PanDirection.Vertical})
+    .gesture(PanGesture({ direction: PanDirection.Vertical })
       .onActionUpdate((event: GestureEvent) => {
         this.getUIContext()?.animateTo({ duration: 40, curve: Curve.EaseOut }, () => {
           this.offset_bar = event.offsetY + this.gesture_start // >0 上滑  <0 下滑
+          try {
+            motion.on('holdingHandChanged', this.callback);
+            console.info('change Hand')
+          } catch (err) {
+            let error = err as BusinessError;
+            console.error(`Failed to subscribe holdingHandChanged. Code: ${error.code}, message: ${error.message}`);
+          }
         })
+
+
       })
       .onActionEnd(() => {
         this.gesture_start = this.offset_bar;
       }))
-
 
   }
 
