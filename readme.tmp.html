@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Beat-Per-Mile 跑步电台</title>
+<style>
+body{font-family:"Microsoft YaHei",SimSun,sans-serif;font-size:10.5pt;line-height:1.6}
+h1{font-size:20pt}h2{font-size:16pt}h3{font-size:13pt}h4{font-size:11pt}
+code{font-family:Consolas,monospace;background:#F2F3F7;font-size:9pt}
+table{border-collapse:collapse}
+th,td{border:1px solid #BFBFBF;padding:4pt}
+</style></head>
+<body>
+<p>&lt;div align="center"&gt;</p>
+<h1>Beat-Per-Mile 跑步电台</h1>
+<p><span style="font-size:9pt;color:#666">［Harmony_OS_SDK］</span>-red)<br><span style="font-size:9pt;color:#666">［Language］</span><br><span style="font-size:9pt;color:#666">［License］</span><br><a href="https://github.com/ZX-RAY1124"><span style="font-size:9pt;color:#666">［Team］</span></a><br><a href="https://developer.huawei.com/consumer/cn/activity/incentive/C4?ha_source=zhongguoqingnianbao&amp;ha_sourceId=89000241"><span style="font-size:9pt;color:#666">［Race］</span></a><br><span style="font-size:9pt;color:#666">［Static Badge］</span><br><span style="font-size:9pt;color:#666">［Static Badge］</span></p>
+<blockquote style="border-left:3pt solid #FF6B6B;margin-left:0;padding-left:8pt;color:#444">《Beat-Per-Mile 跑步电台》是面向跑步人群的智能音频处理应用，通过无损音频变速技术，在不改变歌曲音高的前提下调节乐曲节奏，创新采用实时步频捕获、预设步频曲线两套控制方案，让本地音乐自动匹配跑步步频，实现脚步与乐曲精准踩点，满足休闲慢跑与专业节奏训练双重场景。</blockquote>
+<p><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/program_discription_chart.png" alt="" width="400" style="max-width:100%"><br>&lt;/div&gt;</p>
+<h2>项目介绍</h2>
+<ul><li><strong>项目背景</strong>：</li><li>本项目基于鸿蒙（HarmonyOS）系统原生框架、多媒体音频能力与运动传感器能力，开发一款轻量化、低延迟的实时音频流变速处理引擎。引擎核心解决跑步场景下音乐节奏与人体步频不匹配的痛点，在绝对保留原歌曲音高、音色、音质的前提下，对本地任意 BPM 的音乐音频流进行实时变速调校，将歌曲节奏精准适配至用户指定跑步步频区间，实现音乐节奏与跑步步伐精准 “踩点” 的沉浸式运动体验。</li><li>同时，为适配不同用户的跑步习惯、训练阶段与运动场景，系统设计双模式步频控制策略，包含实时动态步频适配与预设步频曲线适配两种核心工作模式，可自由切换，满足用户自由跑、节奏训练跑、梯度耐力跑等多元化跑步需求，打造适配鸿蒙全设备终端的智能跑步音频辅助系统。 </li></ul>
+<ul><li><strong>项目目标</strong></li><li>开发一款实时音频流处理引擎，将本地任意 BPM 的歌曲变速（不改变音高）至用户设定的目标步频区间（如 160-180 BPM），实现“踩点”跑步体验。同时，目标步频区间的控制给出两个控制方案</li><li>实时捕获用户步频作为目标步频</li><li>使用用户预先设置好的步频曲线</li></ul>
+<h2>核心技术选型</h2>
+<h3>系统整体架构（鸿蒙四层架构设计）</h3>
+<ul><li>设备感知层：调用鸿蒙 Sensor 传感器套件、运动健康服务，负责采集用户跑步步频、运动状态等原始数据</li><li>核心算法层：包含音频 BPM 解析算法、无损变速算法、步频匹配校准算法、预设曲线调度算法</li><li>应用交互层：提供参数设置、模式切换、步频可视化、歌曲管理等前端交互功能</li><li>音频处理引擎层</li></ul>
+<h3>音频处理引擎层（核心）</h3>
+<ul><li>BPM 检测引擎：<code>Essentia</code>（用于实时解析音频流中的节拍点）</li><li>变速变调引擎：<code>Signalsmith Stretch</code>（负责高品质独立变速，MIT 协议）</li><li>鸿蒙 <code>Audio Kit</code> 音频处理</li></ul>
+<h3>实时步频捕获（动态模式）</h3>
+<blockquote style="border-left:3pt solid #FF6B6B;margin-left:0;padding-left:8pt;color:#444">动态模式依托鸿蒙系统原生运动传感器（加速度传感器、陀螺仪） 与鸿蒙运动健康服务，实时采集用户跑步时的足部起落震动数据，通过算法滤波、去噪、计数，精准计算用户实时瞬时步频，并将该实时步频作为动态目标 BPM，实时驱动音频引擎调整音乐播放速度，实现音乐节奏跟随用户跑步快慢自动动态适配的效果</blockquote>
+<pre style="background:#F2F3F7;border:1px solid #E0E0E0;padding:8pt;font-family:Consolas,monospace;font-size:9pt;white-space:pre-wrap">flowchart TB
+    A[/"开始高频采集运动数据"/]
+    B["算法对原始传感数据进行滤波降噪、峰值检测，计算当前实时步频"]
+    C["将实时步频动态同步至音频算法层，对比原始歌曲 BPM，计算实时变速倍率"]
+    D["音频引擎实时调整音频流播放速度，全程锁定音高，实现音乐节奏跟随步频动态变化"]
+    E&gt;"实现音乐节奏跟随用户跑步快慢自动动态适配的效果"]
+    
+    A --&gt; B --&gt; C --&gt; D --&gt; E</pre>
+<h3>预设步频曲线（固定模式）</h3>
+<blockquote style="border-left:3pt solid #FF6B6B;margin-left:0;padding-left:8pt;color:#444">固定模式通过用户提前自定义或选用系统内置的阶段性步频曲线方案（随时间变化的步频区间参数），系统按照预设的时间节点、步频数值梯度，自动切换目标 BPM区间，驱动音频引擎对应调整音乐节奏，通过固定节奏的音乐辅助用户完成标准化、梯度化的跑步训练</blockquote>
+<pre style="background:#F2F3F7;border:1px solid #E0E0E0;padding:8pt;font-family:Consolas,monospace;font-size:9pt;white-space:pre-wrap">flowchart TB
+    A[/"用户选择 / 自定义步频曲线方案（或设置固定 BPM），启动跑步训练"/]
+    B["系统根据运行时间，读取当前阶段对应的目标步频区间"]
+    C["算法匹配最优音频变速倍率，对本地歌曲进行精准变速处理"]
+    D["到达预设时间节点后，自动切换下一阶段步频参数，同步更新音乐节奏"]
+    E&gt;"全程无需手动操作，音乐节奏跟随训练计划自动变化，辅助用户规范跑步节奏"]
+    
+    A --&gt; B --&gt; C --&gt; D --&gt; E</pre>
+<h2>应用界面效果图（原稿）</h2>
+<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-size:10pt"><tr><th style="background:#F2F3F7">主界面</th><th style="background:#F2F3F7">运动播放界面</th><th style="background:#F2F3F7">播放列表界面</th><th style="background:#F2F3F7">曲线编辑界面</th><th style="background:#F2F3F7">曲线选择界面</th><th style="background:#F2F3F7">应用设置界面</th><th style="background:#F2F3F7">登录界面</th></tr><tr><td><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/Dev_Display.png" alt="Dev_Display.png" width="350" style="max-width:100%"></td><td><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/player.png" alt="player.png" style="max-width:100%"></td><td><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/play_list.png" alt="play_list.png" style="max-width:100%"></td><td><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/liner.png" alt="liner.png" style="max-width:100%"></td><td><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/liner_chosen.png" alt="liner_chosen.png" style="max-width:100%"></td><td><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/Setting_page.png" alt="Setting_page.png" style="max-width:100%"></td><td><img src="file:///D:/18752/Documents/Files/HarmonyProject/Beat_Per_Mile/entry/src/main/resources/base/media/login_page.png" alt="login_page.png" style="max-width:100%"></td></tr></table>
+<h2>项目预期效果</h2>
+<ul><li>实现任意本地歌曲无损变速适配跑步步频，音高零偏移、音质无损耗，节奏踩点精准</li><li>双模式控制方案可一键自由切换，同时满足用户随性跑步与专业训练两类核心需求</li><li>基于鸿蒙原生能力开发，运行稳定、延迟极低、功耗可控，适配全品类鸿蒙终端</li><li>实现音乐节奏与人体跑步步伐的高度契合，大幅提升跑步运动的沉浸感与运动训练效率</li></ul>
+</body></html>

@@ -1,6 +1,6 @@
 import { Ellipse_animation } from "./Ellipse_animation";
 
-interface Button{
+interface Button {
   index:number,
   offset_y:number,
   button_zoom_x:number,
@@ -11,7 +11,7 @@ interface Button{
 }
 
 
-export class Center_Button implements Button{
+export class Center_Button implements Button {
   index: number = 0;
   offset_y: number = 0;
   button_zoom_x: number = 1;
