@@ -99,6 +99,28 @@ interface StepPipelineStatus {
   hasPlayer: boolean;
 }
 
+/**
+ * 挑这次要播的歌单：
+ *   · want 有效且里面有歌        → 就用它；
+ *   · 否则退而求其次，用第一个"有歌"的歌单（列表里排在前面的优先）；
+ *   · 一个非空歌单都没有          → 返回 -1（退回整库，保证还有东西能播）。
+ *
+ * ★ 为什么要兜底：正式播放器以前是"AppStorage 里有有效下标才用歌单，其余一律整库"，
+ *   而歌单列表页的卡片只是**看起来**默认选中第 0 个，从没写过那个下标 ——
+ *   于是播放器实际读的是曲库（song_data.json 的顺序），歌单里的排序当然不生效。
+ */
+function pickPlaylist(pls: SongListJSON[], want: number): number {
+  if (want >= 0 && want < pls.length && pls[want].songList.length > 0) {
+    return want;
+  }
+  for (let i = 0; i < pls.length; i++) {
+    if (pls[i].songList.length > 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 @Component
 struct MainPlayer {
   @State colorList: string[] = ["#FF6B6B", "#4ECDC4", "#A78BFA"]
@@ -267,9 +289,12 @@ struct MainPlayer {
     }
 
     // 歌单：与「歌单列表」页共享 AppStorage（先选后用）
+    // ★ 过一层 Number()：这个值由 PersistentStorage 落盘，读回来可能是字符串 "0"
+    //   （实测落盘是 <string key="activePlaylistIndex">0</string>），不归一化会出问题。
     const ap: number | undefined = AppStorage.get<number>(ACTIVE_PLAYLIST_KEY);
     if (ap !== undefined) {
-      this.playlistIndex = ap;
+      const n: number = Number(ap);
+      this.playlistIndex = Number.isNaN(n) ? -1 : n;
     }
 
     // 曲线：预设模式优先按「曲线列表」里选中的那条走（0 = 恒定 BPM）
@@ -944,16 +969,32 @@ struct MainPlayer {
   private loadSongList(c: common.UIAbilityContext): void {
     const pls: SongListJSON[] = songListLoadAll(c);
     this.playlists = pls;
-    if (this.playlistIndex >= pls.length) {
-      this.playlistIndex = pls.length > 0 ? 0 : -1;
+
+    // ★ 这次用哪个队列：显式选中的歌单（已跨重启持久化）→ 不可用就退到第一个"有歌"的歌单
+    //   → 一个非空歌单都没有才用整库。
+    //   以前这里只有"显式选中且在范围内"才用歌单，其余一律 loadSongDatabase()；
+    //   而歌单列表页从没写过那个下标，所以播放器读的一直是**曲库** ——
+    //   这就是"歌单里排好的顺序在正式播放器里不生效"的根因。
+    const wantIdx: number = this.playlistIndex;
+    this.playlistIndex = pickPlaylist(pls, wantIdx);
+    if (this.playlistIndex !== wantIdx) {
+      AppStorage.setOrCreate<number>(ACTIVE_PLAYLIST_KEY, this.playlistIndex);
     }
 
     let db: SongEntry[] = [];
     if (this.playlistIndex >= 0 && this.playlistIndex < pls.length) {
       db = resolvePlaylistEntries(c, pls[this.playlistIndex].songList);
+      console.info('[MainPlayer] 播放队列 = 歌单#' + this.playlistIndex.toString()
+        + '「' + pls[this.playlistIndex].name + '」，命中 ' + db.length.toString() + ' 首');
     } else {
       db = loadSongDatabase(c);
+      console.info('[MainPlayer] 播放队列 = 整库（没有可用的歌单），共 ' + db.length.toString() + ' 首');
     }
+    let queueLog: string = '';
+    for (let i = 0; i < db.length; i++) {
+      queueLog += (i > 0 ? ' → ' : '') + db[i].key;
+    }
+    console.info('[MainPlayer] 实际播放顺序: ' + queueLog);
     this.songDb = db;
 
     const want: string = getCurrentSongKey();

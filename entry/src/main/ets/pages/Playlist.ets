@@ -309,12 +309,30 @@ export struct Playlist {
         new PlaylistData(this.SL_JSON[i].name, COLOR_PLAN[this.SL_JSON[i].colorPlan][0], this.SL_JSON[i].songList.length, COLOR_PLAN[this.SL_JSON[i].colorPlan][1])
       )
     }
+    // ★ 把"看起来选中"落实成"真的选中"。
+    //   卡片默认高亮第 0 个（selectedIndex 初值就是 0），但以前只有点卡片本体才会写
+    //   ACTIVE_PLAYLIST_KEY —— 于是列表看着有选中项，正式播放器却读到空值、退回整库，
+    //   歌单里排好的顺序自然不生效。这里统一收口：没有有效选中就落到第 0 个。
+    if (this.PLAYLISTS.length > 0) {
+      const raw: number | undefined = AppStorage.get<number>(ACTIVE_PLAYLIST_KEY);
+      // ★ 同 MainPlayer：落盘读回来的可能是字符串，先归一化成数字，
+      //   否则下面 selectedIndex === index 的"卡片高亮"会整个失效。
+      const cur: number = (raw === undefined) ? -1 : Number(raw);
+      const idx: number = (Number.isNaN(cur) || cur < 0 || cur >= this.PLAYLISTS.length) ? 0 : cur;
+      this.selectedIndex = idx;
+      AppStorage.setOrCreate<number>(ACTIVE_PLAYLIST_KEY, idx);
+    } else {
+      this.selectedIndex = 0;
+      AppStorage.setOrCreate<number>(ACTIVE_PLAYLIST_KEY, -1);
+    }
     this.listVision = this.listVision + 1;         //让Foreach的键发生变化，更新卡片
   }
 
 
 
   private EditSongListColumn(index: number) : void {
+    // 打开编辑器 = 选用这个歌单（不再依赖"必须精确点到卡片本体"）
+    this.select(index);
     const param: SongListJSON = this.SL_JSON[index];
     this.navPathStack.pushPathByName('SongList_Page', param, true);
   }

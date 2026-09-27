@@ -20,6 +20,7 @@ import { Settings } from './Settings';
 import { Playlist } from './Playlist';
 import { MODE_CONSTANT, MODE_DYNAMIC } from '../ets_libs/RunDemoEngine';
 import { MainPlayerParam } from '../ets_libs/PlayerRouteParam';
+import { ACTIVE_PLAYLIST_KEY } from '../ets_libs/PlayListStore';
 
 console.log('模块对象='+JSON.stringify(entry));
 console.log('模块对象是否为undefined = ' + (entry === undefined));
@@ -173,6 +174,11 @@ struct Main {
   }
 
   aboutToAppear(): void {
+    // ★ "当前选中的歌单"必须跨重启记住。
+    //   AppStorage 只在内存里，杀进程 / 装新包后就没了 —— 正式播放器读到空值就会退回
+    //   "整库"，于是歌单里排好的顺序怎么都不会生效。这里用 PersistentStorage 把它落盘。
+    //   默认值 0 与歌单列表页"第一张卡片默认高亮"的表现保持一致。
+    PersistentStorage.persistProp<number>(ACTIVE_PLAYLIST_KEY, 0);
     try {
       window.getLastWindow(this.getUIContext().getHostContext())        //获取窗口大小
         .then((windowClass: window.Window) => {
