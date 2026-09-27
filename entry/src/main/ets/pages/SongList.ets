@@ -455,21 +455,45 @@ export struct SongList {
     .height('100%')
   }
 
-  private loadPlayList(songList: SongJSON[]){
+  /**
+   * 把歌单 json 里的歌还原到面板（selectedIndexes）里。
+   *
+   * ★ 顺序必须是**文件原序**：面板每行左边的数字就是"播放顺序"，
+   *   而 MainPlayer 直接按 songList 的顺序组播放队列（resolvePlaylistEntries 保序），
+   *   所以"面板顺序 = 文件顺序 = 播放顺序"三者必须一致。
+   *   以前这里是借 toggle() 逐首加入的，而 toggle 对新歌用 unshift（插到最前），
+   *   读一遍就把顺序倒了过来；它只有在配合保存时的 plan.reverse() 时才"看起来"自洽，
+   *   代价是落盘顺序 = 面板顺序的反向 —— 正式播放器于是把歌单倒着播。
+   *
+   * 匹配规则沿用旧实现：只按展示名 title 匹配；同一首出现多次只算一次（等价于 toggle 的去重）。
+   */
+  private loadPlayList(songList: SongJSON[]): void {
+    const next: number[] = [];
     songList.forEach((item) => {
-      SONGS.forEach((song_item) => {
-        if(item.name === song_item.title){
-          this.toggle(SONGS.indexOf(song_item));
+      for (let i = 0; i < SONGS.length; i++) {
+        if (item.name === SONGS[i].title) {
+          if (next.indexOf(i) < 0) {
+            next.push(i);
+          }
+          break;
         }
-      })
+      }
     })
+    this.selectedIndexes = next;
+    if (next.length === 0) {      // 空歌单时顺手收起面板（与 toggle 的行为保持一致）
+      this.isSheetShow = false;
+    }
   }
 
 
   private save_playList_plan(plan: number[]): SongListJSON {
-    plan.reverse();
+    // ★ 按面板顺序原样落盘：面板顺序 == 播放顺序（MainPlayer 按文件顺序组队列）。
+    //   以前这里是 plan.reverse()，把顺序倒过来存，还顺带就地改掉了 @State selectedIndexes；
+    //   结果就是"正式播放器播出来的顺序和面板里排的正好相反"。
+    //   这里先拷贝一份，避免像以前那样就地修改调用方的数组。
+    const order: number[] = plan.slice();
     let callback: SongListJSON = {name:this.SONG_LIST_NAME,songList:[],colorPlan:this.COLOR_PLAN, index:0}
-    plan.forEach((item) => {
+    order.forEach((item) => {
       let SONG_item: SongJSON = {
         name: SONGS[item].title ? SONGS[item].title : '',
         author: SONGS[item].artist ? SONGS[item].artist : '',
