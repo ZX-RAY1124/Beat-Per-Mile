@@ -322,12 +322,7 @@ struct MainPlayer {
             this.hasCurve = true;
             console.info('[MainPlayer] 预设曲线「' + f.name + '」: ' + pts.length + ' 个点');
 
-            // ── 标签（到点语音播报）：单独兜一层，读坏了也绝不影响曲线 ─────────────
-            // ✘ 原来是「alreadyPlay: tags[i].alreadyPlay」：tags 是**正在构建的空数组**，
-            //   i=0 时 tags[0] === undefined，读它的属性直接抛 TypeError，又被外层 catch 吞掉，
-            //   于是 setCurvePoints()/hasCurve=true 从来没执行过 ⇒ 引擎停在 MODE_CONSTANT，
-            //   症状就是「明明选了曲线，进去还是恒速滑块、没有下一节拍点预告」。
-            //   alreadyPlay = 本次播放播报过没有，从 false 起；源文件里本来也没有这个字段。
+            //修标签的
             try {
               const tags: TagPoint[] = [];
               const src: CurveTagJson[] = (f.tags !== undefined) ? f.tags : [];
