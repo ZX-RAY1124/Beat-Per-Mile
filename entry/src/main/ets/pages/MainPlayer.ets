@@ -26,7 +26,7 @@ import {
   TempoPoint,
   TagPoint
 } from '../ets_libs/RunDemoEngine';
-import { ACTIVE_CURVE_KEY, CurveFile, loadAll as curveLoadAll } from '../ets_libs/CurveStore';
+import { ACTIVE_CURVE_KEY, CurveFile, CurveTagJson, loadAll as curveLoadAll } from '../ets_libs/CurveStore';
 import {
   HARD_CUT_FADE_MS,
   HARD_CUT_LEAD_MS,
@@ -312,23 +312,32 @@ struct MainPlayer {
           if (f.points.length >= 2) {
 
             const pts: TempoPoint[] = [];
-            const tags: TagPoint[] = [];
-
             for (let i = 0; i < f.points.length; i++) {
               pts.push({ time: f.points[i].time, bpm: f.points[i].bpm, type: f.points[i].type });
             }
 
-
-            for (let i = 0; i < f.tags.length; i++){
-              tags.push({time: f.tags[i].time, text: f.tags[i].text, alreadyPlay:tags[i].alreadyPlay})       //写入tags
-            }
-
-
-
+            // ★ 先把曲线交给引擎、置 hasCurve —— 这两句决定「预设模式到底走曲线还是退回恒速」，
+            //   必须放在任何可选装饰（标签）之前，且不能被它们拖累。
             this.engine.setCurvePoints(pts);
-            this.engine.setTagList(tags);
             this.hasCurve = true;
             console.info('[MainPlayer] 预设曲线「' + f.name + '」: ' + pts.length + ' 个点');
+
+            // ── 标签（到点语音播报）：单独兜一层，读坏了也绝不影响曲线 ─────────────
+            // ✘ 原来是「alreadyPlay: tags[i].alreadyPlay」：tags 是**正在构建的空数组**，
+            //   i=0 时 tags[0] === undefined，读它的属性直接抛 TypeError，又被外层 catch 吞掉，
+            //   于是 setCurvePoints()/hasCurve=true 从来没执行过 ⇒ 引擎停在 MODE_CONSTANT，
+            //   症状就是「明明选了曲线，进去还是恒速滑块、没有下一节拍点预告」。
+            //   alreadyPlay = 本次播放播报过没有，从 false 起；源文件里本来也没有这个字段。
+            try {
+              const tags: TagPoint[] = [];
+              const src: CurveTagJson[] = (f.tags !== undefined) ? f.tags : [];
+              for (let i = 0; i < src.length; i++) {
+                tags.push({ time: src[i].time, text: src[i].text, alreadyPlay: false });
+              }
+              this.engine.setTagList(tags);
+            } catch (e2) {
+              console.error('[MainPlayer] 标签读取失败（曲线不受影响）：' + JSON.stringify(e2));
+            }
           }
         }
       }
@@ -951,6 +960,9 @@ struct MainPlayer {
       : (this.hasCurve ? MODE_CURVE : MODE_CONSTANT);
     this.modeC = m;
     this.engine.setMode(m);
+    // 排障用：预设模式「退了恒速」时，这行能直接看出是没曲线，而不是卡片写错了
+    console.info('[MainPlayer] 入口 requested=' + requested + ' hasCurve=' + this.hasCurve
+      + ' → engine=' + (m === MODE_DYNAMIC ? '动态' : (m === MODE_CURVE ? '曲线' : '恒速')));
   }
 
   // ==================== 曲库 / 歌单 / 切歌 ====================
