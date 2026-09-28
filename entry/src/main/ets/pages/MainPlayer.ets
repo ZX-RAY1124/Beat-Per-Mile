@@ -1739,26 +1739,29 @@ struct MainPlayer {
 
   private refreshTag(workoutSec: number): void {
     const tags: TagPoint[] = this.engine.getTag();
+    const tagLast: TagPoint = tags[tags.length - 1];
 
     if(tags.length === 0){
       return;
     }
     let nx: number = -1;
-    for(let i : number = 0; i < tags.length; i ++){
-      if(tags[i].time <= workoutSec && !tags[i].alreadyPlay){
-        nx = i;
+    if(workoutSec - tagLast.time < 1) {
+      for (let i: number = 0; i < tags.length; i++) {
+        if (tags[i].time <= workoutSec && !tags[i].alreadyPlay) {
+          nx = i;
+        }
       }
-    }
-    const tagText: string = (nx >= 0) ? tags[nx].text : "";
-    if(tagText){
-      this.voiceSpeaker.speakText(tagText);
-      tags[nx].alreadyPlay = true;
-      return;
+      const tagText: string = (nx >= 0) ? tags[nx].text : "";
+      if (tagText) {
+        this.voiceSpeaker.speakText(tagText);
+        tags[nx].alreadyPlay = true;
+        return;
+      }
     }
     if(nx < 0){
       return;
     }
-
+    return;
   }
 
 
