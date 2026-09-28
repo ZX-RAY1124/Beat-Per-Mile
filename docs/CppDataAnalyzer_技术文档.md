@@ -1,15 +1,23 @@
 # CppDataAnalyzer 技术文档
 
+> 最后更新：2026-09-28
 > 节拍表 → 多 BPM 速度段落检测的算法原理与处理流程
-> 对应代码：`CppDataAnalyzer.hpp`（header-only）、`CppDataAnalyzerCli.cpp`（命令行外壳）
-> 前身：`CppDataAnalyzer.cpp`（算法与 CLI 混在一起，单次随机初始化版）
+> 对应代码：`entry/src/main/cpp/CppDataAnalyzer.hpp`（header-only · C++11 · 833 行 · 无外部依赖）
+> 命名空间 `cda`。命令行外壳 `CppDataAnalyzerCli.cpp` 与旧实现 `CppDataAnalyzer.cpp` **都已不在工程里**，
+> 现在只剩这一个头文件；头文件里的"原版"叙述是它们的算法前身，仅作背景保留。
+
+> **现状（2026-09-28）**：`napi_bridge_center.cpp` 第 2 行 include 了本头文件；
+> `analyzeSongSegments()` 读 `analyzeMusicAsync` 写下的 `<同名>_beats.csv`，调用
+> `cda::analyze_file(csv, opt)`（第 865-867 行），把结果拼成 JSON 返回 ArkTS。
+> 当前 App 显式设 `opt.multi_segment = false`（第 866 行），即**单 BPM 模式**：
+> 整首歌只输出一个平均 BPM；多段模式（本文 §7 的递归分裂）代码已就绪，只是没有启用。
 
 ---
 
 ## 目录
 
 1. [它解决什么问题](#1-它解决什么问题)
-2. [输入输出](#2-输入输出)
+2. [输入输出与 API](#2-输入输出与-api)
 3. [处理流程总览](#3-处理流程总览)
 4. [第一步：拍间隔与"层级混叠"](#4-第一步拍间隔与层级混叠)
 5. [第二步：聚类归一化](#5-第二步聚类归一化)
@@ -46,7 +54,7 @@
 
 ---
 
-## 2. 输入输出
+## 2. 输入输出与 API
 
 **输入**：节拍表 CSV（与 `madmom_to_CSV.py` / `essentia_to_CSV.py` 输出格式一致）
 
@@ -69,6 +77,39 @@
 | `r2` / `rmse` | 拟合优度 / 残差标准差 |
 | `a`, `b`, `c` | 二次模型系数（可用于逐拍求 BPM） |
 | `beat_count` | 段落内节拍数 |
+
+### 2.1 命名空间与数据结构（`namespace cda`）
+
+| 名字 | 说明 |
+|---|---|
+| `cda::BeatTable` | `song` / `model` / `beats`（升序时间戳），是 `parse_beats_csv()` 的输出 |
+| `cda::Paragraph` | 段落拟合结果：`start` / `end` / `a,b,c` / `bpm_start` / `bpm_trend` / `r2` / `rmse` / `beat_count`；另有 `duration()` / `period_at(n)` / `bpm_at(n)` / `time_at(n)` / `contains(t)` / `bpm_at_time(t)` |
+| `cda::Options` | 全部算法参数 + `multi_segment` 模式开关，默认值见 §10 |
+| `cda::Result` | 高层返回值：`ok` / `error` / `song` / `model` / `total_beats` / `paragraphs`，以及 `average_start_bpm()` / `all_confident(r2 = 0.99)` |
+
+### 2.2 公开函数
+
+| 层次 | 函数 | 说明 |
+|---|---|---|
+| 高层 | `analyze_file(csv_path, opt = Options())` | 读 CSV + 分析，最常用（NAPI 用的就是它） |
+| 高层 | `analyze_beats(beats, opt = Options())` | 直接分析一组时间戳 |
+| 低层 | `detect_dynamic_bpm(beats, opt, depth = 0)`，另有 `detect_dynamic_bpm(beats)` 便捷重载 | 递归分裂核心；`multi_segment = false` 时内部转 `detect_single_bpm()` |
+| 低层 | `estimate_segment_parameters()` / `estimate_single_bpm()` / `detect_single_bpm()` | 单段估计（二次 / 线性）与单段入口 |
+| 低层 | `kmeans_1d(data, k, max_iter = 100, seed = 0, n_init = 10)` | 一维 k-means（k=2 精确最优，k>2 走 n_init 次重启） |
+| 低层 | `quadratic_regression(x, y, a, b, c)` | 二次最小二乘（列主元高斯消元） |
+| CSV | `parse_beats_csv(filename, out, error = 0)` / `paragraphs_to_csv(song, model, paragraphs)` | 读写（写出的表头：`song,model,index,start,end,duration,bpm_start,bpm_trend,r2,rmse,beat_count`） |
+| 输出 | `format_paragraphs(paragraphs)` / `format_summary(result)` | 库本身不打印，返回字符串 |
+
+> 命名空间 `cda::detail` 下还放着 `linear_regression()` / `normalize_beats()` / `fit_quality()`
+> 等内部实现，一般不需要直接调用。
+
+### 2.3 两种模式（`Options::multi_segment`）
+
+- `true`（默认）：多 BPM 段检测，递归分裂，输出若干 `Paragraph`，每段独立的 `bpm_start` / `bpm_trend`。
+- `false`：单 BPM 模式，整首歌只输出**一个**段落；抗混叠归一化照做，但改用**线性**回归，
+  `a = 0`、`bpm_trend = 0`，`bpm_at()` 在任何拍上都返回同一个 BPM。
+- 当前 App 在 `napi_bridge_center.cpp` 第 866 行显式用 `false`（单段）——所以本文 §7 的递归分裂
+  在库里存在且经过验证，但线上链路暂时只走单段分支。
 
 ---
 
@@ -316,7 +357,7 @@ beat_labels[N-1] = labels[N-2]      // 最后一拍用最后一个间隔的标�
 
 ### 9.1 问题的发现
 
-原版 `CppDataAnalyzer.cpp` 的 k-means 用 `std::random_shuffle` 做**一次**随机初始化
+原版 C++ 实现（`CppDataAnalyzer.cpp`，**已不在工程里**）的 k-means 用 `std::random_shuffle` 做**一次**随机初始化
 （无参数版本内部用 `rand()`）。我们用同一份数据、只改变初始化种子，实测结果：
 
 | 用例 | 不同种子下的结果 |
@@ -383,6 +424,7 @@ SSE(s) = [Σ_{i<s} xᵢ² - (Σ_{i<s} xᵢ)²/s] + [Σ_{i≥s} xᵢ² - (Σ_{i�
 | `kmeans_n_init` | 10 | 重启次数 | 仅 k>2 时生效，对应 sklearn 的 n_init |
 | `multiplier_tol` | 0.5 | 整数倍判定容忍度 | 调小 → 更保守（更少缩放）；调大 → 更激进 |
 | `seed` | 0 | 仅 k>2 路径使用的随机种子 | k=2（默认）时**完全不影响结果** |
+| `multi_segment` | true | true = 多 BPM 段检测（§7）；false = 整首只输出一个平均 BPM（§2.3） | 当前 App 用的是 **false**（`napi_bridge_center.cpp` 第 866 行） |
 
 ---
 

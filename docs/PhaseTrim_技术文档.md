@@ -1,8 +1,17 @@
 # PhaseTrim 技术文档（预设模式的相位同步工具）
 
-> 源文件：`phase_trim.hpp`（纯头文件 · C++11 · 只依赖 `beatgrid.hpp` · 约 230 行）
-> 当前位置：**`entry/src/main/cpp/phase_trim.hpp`（已入工程）**
+> 最后更新：2026-09-28
+> 源文件：`phase_trim.hpp`（纯头文件 · C++11 · 只依赖 `beatgrid.hpp` · 271 行）
+> 当前位置：**`entry/src/main/cpp/phase_trim.hpp`（已入工程，并已在 native 侧接线）**
 > 设计背景见 `C++核心协同方案.md` §8.6；本文只讲"它是什么、怎么用、在哪用"。
+
+> **现状（2026-09-28）**：`phase_trim.hpp` 已被 `step_pipeline.hpp` include（第 25 行），
+> 并在其 PRESET 控制律里**实际调用**：`onStep()` 第 274-289 行算 `r = tempo::beatOffset(...)` 后调
+> `trim_.update(r, dtStep)`（成员 `trim_` 见第 330 行）；`step_pipeline.hpp` 又由
+> `napi_bridge_center.cpp`（第 14 行）编译进 App。
+> 需要说明的是：当前两个播放器（`MainPlayer.ets`、`Player.ets`）只在**动态模式**起管线并传
+> `mode = 0`（FOLLOW，见 `Player.ets` 第 1372 行、`MainPlayer.ets` 第 1490 行），
+> 恒速/曲线走完全开环 —— 所以 native 侧 PRESET + PhaseTrim 已经接好，UI 暂未切到它。
 
 ---
 
@@ -218,15 +227,17 @@ trim.setTargetOffset(0.0);      // 0.5 的偏置永远修不掉
 
 ---
 
-## 6. 在哪使用
+## 6. 在哪使用（2026-09-28 现状）
 
-| 用在哪 | 用来干什么 | 对应任务 |
+| 用在哪 | 用来干什么 | 现状 |
 |---|---|---|
-| **恒定 BPM 模式的速度来源** | 算完 `规定步频 / BPM` 后乘上 `factor()` | 任务 3 |
-| **曲线模式的速度来源** | 同上（曲线插值出规定步频） | 任务 3 |
-| **起播 / 切歌后的一次性对齐** | 观测几个脚步 → `setTargetOffset()` → 自动收敛 | 任务 2 / 4 |
-| **「对齐微调」滑条** | `setNudge()` | 任务 2 |
-| **模式切换** | 进动态模式前 `enabled = false` | 任务 1 |
+| `step_pipeline.hpp` 的 **PRESET 控制律** | `onStep()` 里算 `r = tempo::beatOffset(songAtStep, songBpm_, firstBeatSec_)`，再 `trim_.update(r, dtStep)` 得到 `(1+δ)`；基准倍速由 `setPresetTargetBpm()` / `baseMultiplier()` 给出（= `规定步频 / 歌曲BPM`） | **已接线**（第 25、274-289、302-308、330 行） |
+| `step_pipeline.hpp` 模式切换 | `setMode()` 清 `trim_.reset()`，避免两个相位所有者互相污染（第 123-128 行；`reset()` 第 176 行也清） | **已接线** |
+| `stepPipelineStatus` 上报 | PRESET 下 `followState = trim_.engaged() ? 1 : 2`、`phaseOffset`、`delta = trimMult_ - 1`（第 241-243 行；`types/libentry/index.d.ts` 第 100-103 行） | **已接线** |
+| 恒速 / 曲线的速度来源 | `st.multiplier = clampMult(base * trimMult_)`，即 `规定倍速 × (1+δ)` | **已接线**（第 235-243 行） |
+| NAPI/UI 的「对齐微调」滑条 | `setNudge()` | **未接线**：工程内没有调用方 |
+| 起播 / 切歌后的一次性对齐 | 观测几个脚步 → `setTargetOffset()` | **未接线**：工程内没有调用方 |
+| 动态模式（FOLLOW） | 相位归 `TempoFollower` 的 CHASE；PRESET 分支不会执行 | 互斥，代码里已用 `mode_` 分开 |
 
 **不在这里用**：动态模式（步频跟随）。那里相位归 `TempoFollower` 的 CHASE 管。
 

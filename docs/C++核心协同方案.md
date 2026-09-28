@@ -2,7 +2,13 @@
 
 # C++ 核心协同方案：步频跟随闭环 与 切歌对拍
 
-> 状态：设计讨论稿 + 参考实现（不含对现有代码的改动）
+> 状态：设计讨论稿 + 参考实现。**2026-09-28 更新：本文多数机制已经落地到工程里**（见下方「落地现状」），本文继续作为原理与公式的参考。
+>
+> **落地现状（2026-09-28）**
+> - ✅ **已实现并接进 App**：`beatgrid.hpp`（§11.0）、`step_pipeline.hpp` 的 `SongClock` 回填（§11.1）、传感器批次接线与真实传感器路径（§11.2 + `stepSensorStart/Push`）、延迟单位换算（§11.3）、`phase_trim.hpp`（§11.5，已接进 native PRESET 控制律；当前 UI 只起 FOLLOW）、开环速度来源与暂停冻结（§11.6，见 `RunDemoEngine.ets` 的 `MODE_CONSTANT`/`MODE_CURVE`）。
+> - 🟡 **已实现但未接线**：`switch_plan.hpp`（§11.7）—— 工程里没有任何 `.cpp` include 它；当前接歌走 `MainPlayer.ets` 的预解码 + 硬切淡入淡出。
+> - ❌ **尚未实现**：`planMix` + Mixer（§11.8）、downbeat Viterbi（§11.9）、锚点相位圆均值与质量闸门（§11.10）。
+> - 播放器已经是**会话式**接口（`music_prepare/music_start/music_seek/music_set_speed/music_set_volume/musicGetStatus`），权威声明见 `entry/src/main/cpp/types/libentry/index.d.ts`。
 > **⏱ 只有 15 分钟？先看 `速览与行动清单.md`** —— 那份是给协作者的行动版，看完就知道现在到哪一步、接下来谁做什么。本文是完整设计与参考实现，用来查细节。
 > 涉及核心：`step_detector.hpp` / `TempoFollower.hpp` / `LiveStretchPlayer.h`(+ `TimeStretchEngine.hpp`) / `EssentiaBeats.hpp` / `CppDataAnalyzer.hpp`
 > 本文回答两个问题：
@@ -863,6 +869,12 @@ m*_B = 180/180 = 1.0
 
 ---
 
+> **现状备注（2026-09-28）**：本节画的是目标架构。工程里的实际装配是把
+> `gaitsim::GaitSim → steplib::StepDetector → tempo::TempoFollower / bpmw::PhaseTrim`
+> 收进 `entry/src/main/cpp/step_pipeline.hpp`，线程与 NAPI 调度在 `napi_bridge_center.cpp`；
+> 播放侧是会话式 `LiveStretchPlayer`（`music_prepare/music_start`）。
+> 图中的「切歌对拍器 SwitchAligner」对应 `switch_plan.hpp`，**目前尚未接进主流程**。
+
 ## 6. 需要做的验证实验（都能用现有的测试脚手架做）
 
 | # | 验证什么                      | 怎么做                                                                             | 通过标准                                            |
@@ -1449,6 +1461,22 @@ firstBeatAtOrAfter(minPos) = anchor + P · ceil((minPos − anchor) / P)
 > 本节是前面所有"机制"的落地版。代码按 **C++11、纯头文件、可移植** 写，风格对齐 `step_detector.hpp` / `TempoFollower.hpp`。
 > 命名空间：`beatgrid`（网格）、`bpmw`（接线）、`dbn`（downbeat）。
 > **不含**鸿蒙 / NAPI / OH_AudioRenderer 的具体调用——那些在 §5 的架构里已经写清楚，这里只写算法。
+
+> **落地对照（2026-09-28）**
+>
+> | 小节 | 落地文件 | 状态 |
+> |---|---|---|
+> | §11.0 `Grid` | `entry/src/main/cpp/beatgrid.hpp` | ✅ 已入工程 |
+> | §11.1 `SongClock` | `entry/src/main/cpp/step_pipeline.hpp` | ✅ 已入工程 |
+> | §11.2 传感器批次接线 | `napi_bridge_center.cpp` + `ets_libs/StepSensor.ets` | ✅ 已接入 |
+> | §11.3 延迟换算 | `beatgrid.hpp` 的自由函数 | ✅ 已入工程 |
+> | §11.4 相位圆均值 | — | ❌ 未做 |
+> | §11.5 `PhaseTrim` | `entry/src/main/cpp/phase_trim.hpp` | ✅ 已接入 PRESET 模式 |
+> | §11.6 开环速度来源 | `RunDemoEngine.ets`（`MODE_CONSTANT`/`MODE_CURVE`） | ✅ 已接入 |
+> | §11.7 `planSwitch` | `entry/src/main/cpp/switch_plan.hpp` | 🟡 已入工程、未接线 |
+> | §11.8 `planMix` + Mixer | — | ❌ 未做 |
+> | §11.9 downbeat | — | ❌ 未做 |
+> | §11.10 锚点圆均值 | — | ❌ 未做 |
 
 ### 11.0 公共基建：拍点网格 `Grid`（全篇复用）
 
@@ -2701,7 +2729,21 @@ inline SongGridInfo makeSongGrid(double fRaw, double bpm,
 
 **每一步都能独立验证**：§6 的 7 个实验按同样的顺序排下来，正好一一对应。
 
+> **落地现状（2026-09-28）**：第 1、2、5 步已落地（`beatgrid.hpp` / `step_pipeline.hpp` / 开环速度来源）；
+> 第 3 步做了一半 —— 延迟换算与起步延迟校正窗口已做，**对齐微调滑条还没 UI**（`PhaseTrim::setNudge()` 已就绪但无人调用）；
+> 第 4 步 `planSwitch` 只做到「文件入工程」，还没接进接歌流程；
+> 第 6、7、8 步（锚点圆均值 / downbeat / Mixer）尚未开始。
+
 ## 12. 待拍板的问题
+
+> **现状（2026-09-28）**：下面这些当初待定的问题，多数已经有了实际选择（不一定是照本文推荐做的）：
+> - 1（`stepDelaySec` 单位）：工程内部暂用头文件既有语义，上层换算走 `beatgrid::offsetToStepDelaySec()`。
+> - 3（v1 拍点硬切）：**已选硬切** —— `MainPlayer.ets` 用预解码 + `HARD_CUT_LEAD_MS/FADE_MS`。
+> - 6（对齐微调滑条）：**尚未做**，`PhaseTrim::setNudge()` 已就绪。
+> - 8（暂停时曲线时间轴）：**已选暂停冻结**（`RunDemoEngine.ets` 的累计运动时间）。
+> - 9（防反拍护栏）：`PhaseTrim` 默认走**伺服**（`guardOnly=false`）。
+> - 11（downbeat）：**未做**；其前提「歌库形态」已定为**设备端离线分析**（`analyzeMusicAsync` + `analyzeSongSegments`）。
+> - 14（锚点圆均值）：**未做**。
 
 1. **`stepDelaySec` 的对外单位**：墙钟秒 / 歌曲秒 / offset 单位？（本文推荐 **offset 单位 × 100**，因为界面上它就是"对齐微调"）
 2. **节拍层级（4.9）在哪一层决定**：分析时落库，还是播放时动态判？前者可复现，后者自适应。

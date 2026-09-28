@@ -1,8 +1,16 @@
 # SwitchPlan 技术文档（切歌对拍）
 
-> 源文件：`switch_plan.hpp`（纯头文件 · C++11 · 只依赖 `beatgrid.hpp` · 约 350 行）
-> 当前位置：**`entry/src/main/cpp/switch_plan.hpp`（已入工程）**
+> 最后更新：2026-09-28
+> 源文件：`switch_plan.hpp`（纯头文件 · C++11 · 只依赖 `beatgrid.hpp` · 352 行）
+> 当前位置：**`entry/src/main/cpp/switch_plan.hpp`（已入工程，但尚未接线）**
 > 设计背景见 `C++核心协同方案.md` §4；本文只讲"它是什么、怎么用、在哪用"。
+
+> **现状（2026-09-28）**：`switch_plan.hpp` 代码完整（`planSwitch` 第 180 行、
+> `planSwitchDegraded` 第 287 行、`beatsFromStartToEdge` 第 340 行都在），
+> 但**没有被任何 `.cpp/.hpp` include**，因此不参与编译；工程里也搜不到这些函数的调用。
+> 当前换歌起播走的是 `napi_bridge_center.cpp` 的 `music_prepare` / `music_start` 预解码硬切路径
+> （`types/libentry/index.d.ts` 第 5-8 行），不经过 `planSwitch`。
+> 本文的算法与验证数据仍然成立，接线时按 §4 使用即可。
 
 ---
 
@@ -234,15 +242,19 @@ req.now = Date_now();      // 会被系统时间调整影响 ⇒ 用 steady_cloc
 
 ---
 
-## 5. 在哪使用
+## 5. 在哪使用（2026-09-28 现状）
 
-| 用在哪 | 用来干什么 | 对应任务 |
+**当前没有调用方**：`switch_plan.hpp` 未被任何 `.cpp/.hpp` include，工程里也搜不到
+`planSwitch` / `planSwitchDegraded` / `beatsFromStartToEdge` 的调用。
+下表是接线后各功能的落点（接口都已在头文件里就绪）：
+
+| 用在哪 | 用来干什么 | 现状 |
 |---|---|---|
-| **切歌流程**（NAPI 层） | 换歌时算 `tEdge / tStart / seekFrame`，然后按时刻驱动两个 player | 任务 1 / 4 |
-| **接歌**（交叉淡化） | 用 `wantLeadBeats > 0` 算引子时刻，配合 `overlapSec` | 任务 7a |
-| **A 即将自然结束时** | 读 `aEndWall` 决定什么时候必须开始准备 B | 任务 4 |
-| **B 没有分析结果时** | `planSwitchDegraded()` | 任务 4 |
-| **延迟标定的验证** | 用 `beatsFromStartToEdge()` 断言相位对齐 | 任务 2a |
+| 切歌流程（NAPI 层） | 换歌时算 `tEdge / tStart / seekFrame`，然后按时刻驱动两个 player | 未接线 |
+| 接歌（交叉淡化） | 用 `wantLeadBeats > 0` 算引子时刻，配合 `overlapSec` | 未接线（音量斜坡本身已由 `music_set_volume` 的 `rampMs` 提供，见 `index.d.ts` 第 16-17 行） |
+| A 即将自然结束时 | 读 `aEndWall` 决定什么时候必须开始准备 B | 未接线 |
+| B 没有分析结果时 | `planSwitchDegraded()` | 未接线 |
+| 延迟标定的验证 | 用 `beatsFromStartToEdge()` 断言相位对齐 | 未接线 |
 
 ---
 

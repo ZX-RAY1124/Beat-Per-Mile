@@ -37,7 +37,7 @@
       include_directories(.../include/libavcodec)
       ...
 
-② 编译 napi_init.cpp 时，代码里有 #include <string>
+② 编译 napi_bridge_center.cpp（历史文件名 napi_init.cpp）时，代码里有 #include <string>
       → <string> 内部又引入 <atomic>
       → <atomic> 引入 <__thread/poll_with_backoff.h>
       → 最终引入 libc++ 的 <ctime>
@@ -217,7 +217,7 @@ int main() { return 0; }
 不依赖 IDE 的「一键编译」，直接手动跑 clang++ 命令，可以精确控制参数：
 
 ```powershell
-clang++.exe --target=aarch64-linux-ohos --sysroot=... -fsyntax-only napi_init.cpp
+clang++.exe --target=aarch64-linux-ohos --sysroot=... -fsyntax-only napi_bridge_center.cpp
 ```
 
 - `-fsyntax-only`：只检查语法、不生成产物，**速度快、适合反复试错**；

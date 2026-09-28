@@ -1,8 +1,14 @@
 # BeatGrid 技术文档（拍点 / 小节网格）
 
-> 源文件：`beatgrid.hpp`（纯头文件 · C++11 · 零第三方依赖 · 约 320 行）
+> 最后更新：2026-09-28
+> 源文件：`beatgrid.hpp`（纯头文件 · C++11 · 零第三方依赖 · 329 行）
 > 当前位置：**`entry/src/main/cpp/beatgrid.hpp`（已入工程）**
 > 完整设计背景见 `C++核心协同方案.md`，本文只讲"它是什么、怎么用、在哪用"。
+
+> **现状（2026-09-28）**：`beatgrid.hpp` 已被 `phase_trim.hpp`（第 106 行）与
+> `switch_plan.hpp`（第 77 行）include。`phase_trim.hpp` 又被 `step_pipeline.hpp`
+> （第 25 行）include，因此 `beatgrid` 随 App 一起编译；而 `switch_plan.hpp` 目前
+> 没有被任何 `.cpp/.hpp` include，属于"已写好但未接线"。
 
 ---
 
@@ -251,17 +257,17 @@ if (beatgrid::circularDistance(off1, off2) < 0.1) { ... }
 
 ---
 
-## 5. 在哪使用
+## 5. 在哪使用（2026-09-28 现状）
 
-| 用在哪 | 用来干什么 | 对应任务 |
+| 用在哪 | 用来干什么 | 现状 |
 |---|---|---|
-| `TempoFollower.hpp` | 它的 `beatOffset()` 就是 `Grid::offset()`。将来可以改成内部持有一个 `Grid`，两边彻底统一 | 已有 |
-| `CppDataAnalyzer.hpp` | 分析完成后把 `Paragraph` 转成 `Grid`；锚点改用相位圆均值后落库 | 任务 5 |
-| 延迟标定模块 | `wallDelayToStepDelaySec()` / `foldClamped()` 换算出 `stepDelaySec` | 任务 2a |
-| 开环速度模块（曲线 / 恒定 BPM） | 用 `offset()` 观测相位，用 `fold()` 判断要不要拉一把 | 任务 3 |
-| 切歌对拍模块 | `firstAfter()` 求 A 的下一拍，`nearest()` 吸附 B 的入点 | 任务 4 |
-| 接歌模块 | `bars()` 求小节网格，两条小节线各自 `firstAfter()` | 任务 7a |
-| `napi_bridge_center.cpp` | 最终接线处：每次拿到脚步事件后算相位、推倍速 | 任务 1 |
+| `phase_trim.hpp`（第 106 行 include） | `sanitize()` / `setTargetOffset()` 用 `beatgrid::fold()`（第 158、170 行）；`update()` / `errorOf()` 用 `beatgrid::circularError()`（第 192、242 行） | **已接线**（`phase_trim.hpp` 被 `step_pipeline.hpp` 第 25 行 include） |
+| `switch_plan.hpp`（第 77 行 include） | 用 `Grid` 承载 `gA` / `gB`（第 129、133、274 行）；`firstAfter()` / `nearest()` / `lastAtOrBefore()` 求 A 的下一拍与 B 的入点（第 204、213、215 行） | **未接线**：`switch_plan.hpp` 没有被任何 `.cpp/.hpp` include |
+| `TempoFollower.hpp` | 自带 `tempo::beatOffset()`（第 105 行），与 `Grid::offset()` 逐行等价；内部尚未改用 `Grid` | 独立实现 |
+| `CppDataAnalyzer.hpp` | 输出的是 `Paragraph`（`bpm_start` / 起止时间），既不 include `beatgrid.hpp`，也没有"`Paragraph` → `Grid`"的转换代码 | 未接线 |
+| 延迟标定 | `wallDelayToStepDelaySec()` / `foldClamped()` 换算出 `stepDelaySec` | 函数已就绪，工程内暂无调用方 |
+| 接歌 / 小节线 | `bars()` 求小节网格 | 函数已就绪，工程内暂无调用方 |
+| `napi_bridge_center.cpp` | 目前没有 `Grid` / `beatgrid::` 的直接调用；脚步相位由 `step_pipeline.hpp` 内部用 `tempo::beatOffset()` 算（第 279 行） | 未接线 |
 
 ---
 
