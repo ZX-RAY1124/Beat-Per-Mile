@@ -157,6 +157,14 @@ export interface TempoPoint {
   type: string;
 }
 
+/**曲线上的一个Tag点 */
+export interface TagPoint {
+  time: number;
+  text: string;
+}
+
+
+
 /**
  * 求 t 秒处的目标 BPM（纯函数，正式播放器可直接复用）。
  *   · 相邻两点之间按**左端点**的 type：'linear' 线性插值，其它退化为"保持左值"；
@@ -397,6 +405,7 @@ export class RunDemoEngine {
   private stagesV: CurveStage[] = [];
   /** 曲线原始点（带 type）—— 求值走这个；stagesV 只用于 UI 的"第几段" */
   private tempoPointsV: TempoPoint[] = [];
+  private tagV: TagPoint[] = [];
   private cadenceSpmV: number = 0;
   private cadenceRamp: number = 0;
   private speedV: number = 1.0;
@@ -488,6 +497,23 @@ export class RunDemoEngine {
     this.stagesV = st;
   }
 
+
+  setTagList(tags: TagPoint[]): void {
+    if(tags.length === 0){
+      return;
+    }
+    const ts: TagPoint[] = [];
+    for(let i = 0 ; i< tags.length; i ++) {
+      ts.push({
+        time: tags[i].time,
+        text: tags[i].text,
+      })
+    }
+
+    this.tagV = ts;
+
+  }
+
   /** 交给 native 管线的倍速驱动（动态模式用） */
   setExternalSpeed(m: number): void {
     this.externalSpeedV = m;
@@ -553,6 +579,7 @@ export class RunDemoEngine {
   getSongName(): string { return this.songNameV; }
   getArtist(): string { return this.artistV; }
   getStages(): CurveStage[] { return this.stagesV; }
+  getTag(): TagPoint[] { return this.tagV;}
 
   /** 进度条拖动 / 回到开头。真机上对应 session_seek */
   seek(sec: number): void {

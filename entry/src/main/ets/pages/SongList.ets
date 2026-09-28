@@ -54,23 +54,7 @@ class SongData {
   }
 }
 
-/** 演示数据 */
-let SONGS: SongData[] = [
-  /*
-  new SongData('Crave Wave', 'LandRoot', 150),
-  new SongData('The Chariot ~REVIIVAL~', 'Attoclef', 190),
-  new SongData('Luminescence', '米虾Fomiki & 初云CLoudie', 184),
-  new SongData('Retribution', 'nm-y & Kry.exe', 190),
-  new SongData('DESTRUCTION 3,2,1', 'Normal1zer vs. Broken Nerdz', 321),
-  new SongData('Distorted Fate', 'Sakuzyo', 150),
-  new SongData('Clock Paradox', 'WyvernP', 140),
-  new SongData('Chronologika', 'Hundotte', 180),
-  new SongData('Nick of Time', 'P4koo', 175),
-  new SongData('Chronomia', 'Lime', 227),
-  new SongData('Chronos Collapse - La Campanella', 'SunsetRay', 180),
-  new SongData("Rrhar'il", 'Team Grimoire', 190),
-  * */
-];
+
 
 /** 行的尺寸与配色 */
 const ROW_PADDING_H: number = 16;        // 行左右内边距
@@ -194,6 +178,26 @@ struct SongRow {
 
 @Component
 export struct SongList {
+
+  /** 演示数据 */
+  @State SONGS: SongData[] = [
+  /*
+  new SongData('Crave Wave', 'LandRoot', 150),
+  new SongData('The Chariot ~REVIIVAL~', 'Attoclef', 190),
+  new SongData('Luminescence', '米虾Fomiki & 初云CLoudie', 184),
+  new SongData('Retribution', 'nm-y & Kry.exe', 190),
+  new SongData('DESTRUCTION 3,2,1', 'Normal1zer vs. Broken Nerdz', 321),
+  new SongData('Distorted Fate', 'Sakuzyo', 150),
+  new SongData('Clock Paradox', 'WyvernP', 140),
+  new SongData('Chronologika', 'Hundotte', 180),
+  new SongData('Nick of Time', 'P4koo', 175),
+  new SongData('Chronomia', 'Lime', 227),
+  new SongData('Chronos Collapse - La Campanella', 'SunsetRay', 180),
+  new SongData("Rrhar'il", 'Team Grimoire', 190),
+  * */
+];
+
+
   @State navPathStack: NavPathStack = new NavPathStack();
   /** 当前播放列表：存的是 SONGS 里的下标，数组顺序＝播放顺序（最后加入的排最前） */
   @State selectedIndexes: number[] = [];
@@ -223,47 +227,54 @@ export struct SongList {
   build() {
     HdsNavDestination() {
       Stack({ alignContent: Alignment.Bottom }) {
-        List() {
-          ForEach(SONGS, (song: SongData, index: number) => {
-            ListItem() {
-              SongRow({
-                title: song.title,
-                artist: song.artist,
-                bpm: song.bpm,
-                duration: song.duration,
-                selected: this.isSelected(index),
-                onToggle: () => {
-                  this.toggle(index);
+        if(this.SONGS.length > 0) {
+          List() {
+            ForEach(this.SONGS, (song: SongData, index: number) => {
+              ListItem() {
+                SongRow({
+                  title: song.title,
+                  artist: song.artist,
+                  bpm: song.bpm,
+                  duration: song.duration,
+                  selected: this.isSelected(index),
+                  onToggle: () => {
+                    this.toggle(index);
+                  }
+                })
+              }.swipeAction({
+                // ★ end = 从右往左滑（左滑）露出的操作区
+                //   点「删除」→ 二次确认 → 清 song_data.json / 音频+beats csv / Songs.json
+                end: {
+                  builder: () => {
+                    this.DeleteActionBuilder(index);
+                  }
                 }
               })
-            }.swipeAction({
-              // ★ end = 从右往左滑（左滑）露出的操作区
-              //   点「删除」→ 二次确认 → 清 song_data.json / 音频+beats csv / Songs.json
-              end: {
-                builder: () => {
-                  this.DeleteActionBuilder(index);
-                }
-              }
-            })
-          }, (song: SongData) => song.title+ '#' + this.listVision.toString())
-        }
-        .width('100%')
-        .height('100%')
-        .scrollBar(BarState.Off)
-        // 淡分割线：与文字左右对齐
-        .divider({
-          strokeWidth: 1,
-          color: DIVIDER_COLOR,
-          startMargin: ROW_PADDING_H,
-          endMargin: ROW_PADDING_H
-        })
-        // HdsNavDestination 的标题栏悬浮在内容之上，这里让出它的高度
-        .padding({ top: $r('sys.float.single_line_titlebar_height') })
-        // 底部给悬浮胶囊留位置
-        .contentEndOffset(CAPSULE_RESERVE)
+            }, (song: SongData) => song.title + '#' + this.listVision.toString())
+          }
+          .width('100%')
+          .height('100%')
+          .scrollBar(BarState.Off)
+          // 淡分割线：与文字左右对齐
+          .divider({
+            strokeWidth: 1,
+            color: DIVIDER_COLOR,
+            startMargin: ROW_PADDING_H,
+            endMargin: ROW_PADDING_H
+          })
+          // HdsNavDestination 的标题栏悬浮在内容之上，这里让出它的高度
+          .padding({ top: $r('sys.float.single_line_titlebar_height') })
+          // 底部给悬浮胶囊留位置
+          .contentEndOffset(CAPSULE_RESERVE)
 
-        if (this.selectedIndexes.length > 0) {
-          this.PlaylistCapsule()
+          if (this.selectedIndexes.length > 0) {
+            this.PlaylistCapsule()
+          }
+        } else {
+          Column(){
+            Text('还没有导入歌曲呢').fontSize(20).fontColor(Color.Gray)
+            Text('点击右上方按钮导入歌曲').fontSize(15).fontColor(Color.Gray)
+          }.offset({y:-400})
         }
       }
       .width('100%')
@@ -405,7 +416,7 @@ export struct SongList {
                   .textAlign(TextAlign.Start)
 
                 Column({ space: 4 }) {
-                  Text(SONGS[ri.item].title)
+                  Text(this.SONGS[ri.item].title)
                     .fontSize(16)
                     .fontColor(TEXT_PRIMARY)
                     .maxLines(1)
@@ -413,7 +424,7 @@ export struct SongList {
                     .width('100%')
                     .textAlign(TextAlign.Start)
                   // 作者 · 时长 · BPM
-                  Text(this.sheetSubtitle(SONGS[ri.item]))
+                  Text(this.sheetSubtitle(this.SONGS[ri.item]))
                     .fontSize(13)
                     .fontColor(TEXT_SECONDARY)
                     .maxLines(1)
@@ -470,8 +481,8 @@ export struct SongList {
   private loadPlayList(songList: SongJSON[]): void {
     const next: number[] = [];
     songList.forEach((item) => {
-      for (let i = 0; i < SONGS.length; i++) {
-        if (item.name === SONGS[i].title) {
+      for (let i = 0; i < this.SONGS.length; i++) {
+        if (item.name === this.SONGS[i].title) {
           if (next.indexOf(i) < 0) {
             next.push(i);
           }
@@ -495,13 +506,13 @@ export struct SongList {
     let callback: SongListJSON = {name:this.SONG_LIST_NAME,songList:[],colorPlan:this.COLOR_PLAN, index:0}
     order.forEach((item) => {
       let SONG_item: SongJSON = {
-        name: SONGS[item].title ? SONGS[item].title : '',
-        author: SONGS[item].artist ? SONGS[item].artist : '',
-        time: SONGS[item].duration ? SONGS[item].duration : '',
-        BPM: SONGS[item].bpm ? SONGS[item].bpm : 0,
-        type: SONGS[item].type,
+        name: this.SONGS[item].title ?  this.SONGS[item].title : '',
+        author:  this.SONGS[item].artist ?  this.SONGS[item].artist : '',
+        time:  this.SONGS[item].duration ?  this.SONGS[item].duration : '',
+        BPM:  this.SONGS[item].bpm ?  this.SONGS[item].bpm : 0,
+        type:  this.SONGS[item].type,
         // 文件名必须一起带走，否则存进歌单后删歌就找不到文件了
-        filename: SONGS[item].filename,
+        filename:  this.SONGS[item].filename,
       }
       callback.songList.push(SONG_item);
     })
@@ -759,7 +770,7 @@ export struct SongList {
     let seconds: number = 0;
     let known: number = 0;
     for (let i = 0; i < this.selectedIndexes.length; i++) {
-      const sec: number = parseDuration(SONGS[this.selectedIndexes[i]].duration);
+      const sec: number = parseDuration( this.SONGS[this.selectedIndexes[i]].duration);
       if (sec >= 0) {
         seconds += sec;
         known++;
@@ -862,7 +873,7 @@ export struct SongList {
 
   private reload_SongList(){
     try {
-      SONGS = [];   //全局歌单清零
+      this.SONGS = [];   //全局歌单清零
       const ctx: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const path: string = ctx.filesDir + '/Media/Songs.json';
       let fd = fs.openSync(path, fs.OpenMode.READ_WRITE| fs.OpenMode.CREATE)
@@ -875,7 +886,7 @@ export struct SongList {
         // 旧数据可能没有 filename 字段（undefined），这里统一成空串
         const fn: string = (item.filename !== undefined && item.filename !== null)
           ? item.filename : '';
-        SONGS.push(
+        this.SONGS.push(
           new SongData(item.name, item.author, item.BPM, item.time, item.type, fn),
         )
         this.listVision += 1;
@@ -973,11 +984,11 @@ export struct SongList {
 
   /** 删除前确认（破坏性操作，必须二次确认） */
   private confirmDelete(index: number): void {
-    if (index < 0 || index >= SONGS.length) {
+    if (index < 0 || index >=  this.SONGS.length) {
       console.error(`[delete] 下标越界: ${index}`);
       return;
     }
-    const song: SongData = SONGS[index];
+    const song: SongData =  this.SONGS[index];
     this.getUIContext().showAlertDialog({
       title: '删除歌曲',
       message: `确定删除「${song.title}」吗？\n音频文件与拍点数据都会一并删除，且不可恢复。`,
@@ -997,11 +1008,11 @@ export struct SongList {
   }
 
   private doDelete(index: number): void {
-    if (index < 0 || index >= SONGS.length) {
+    if (index < 0 || index >=  this.SONGS.length) {
       console.error(`[delete] 下标越界: ${index}`);
       return;
     }
-    const song: SongData = SONGS[index];
+    const song: SongData =  this.SONGS[index];
     const ok: boolean = this.removeSong(song.filename, song.title);
 
     // 播放列表里选中的是 SONGS 的下标；删掉一项后，比它大的下标都要前移一位，

@@ -23,7 +23,8 @@ import {
   resolvePlaylistEntries,
   setCurrentSongKey,
   songFilePath,
-  TempoPoint
+  TempoPoint,
+  TagPoint
 } from '../ets_libs/RunDemoEngine';
 import { ACTIVE_CURVE_KEY, CurveFile, loadAll as curveLoadAll } from '../ets_libs/CurveStore';
 import {
@@ -45,6 +46,7 @@ import { stepSensor } from '../ets_libs/StepSensor';
 import { getStretchEngine } from '../ets_libs/StretchEngine';
 import { MainPlayerParam } from '../ets_libs/PlayerRouteParam';
 import motion from '@ohos.multimodalAwareness.motion';
+import { TtsManager } from '../ets_libs/TtsManager';
 
 /**
  * MainPlayer.ets —— 正式播放器
@@ -158,6 +160,7 @@ struct MainPlayer {
   private pollCounter: number = 0;
   private statusAccum: number = 0;
   private lastStatusSpeed: number = 1;
+  private voiceSpeaker: TtsManager = new TtsManager();     //播放声音的
 
   // ==================== 展示数据（@State 才刷新 UI） ====================
   @State BPM_now : number = 0;              //当前BPM（目标步频）
@@ -269,6 +272,7 @@ struct MainPlayer {
     this.G_token = true;      // 重进页面时重新激活轮询令牌
     this.stop_token = '';
     this.constBpmUi = this.engine.getConstBpm();   // 恒速滑块初值 = 引擎规定步频
+    this.voiceSpeaker.initEngine();      //初始化说话引擎
 
     try {
       window.getLastWindow(this.getUIContext().getHostContext())        //获取窗口大小
@@ -306,11 +310,23 @@ struct MainPlayer {
         if (ci - 1 < curves.length) {
           const f: CurveFile = curves[ci - 1];
           if (f.points.length >= 2) {
+
             const pts: TempoPoint[] = [];
+            const tags: TagPoint[] = [];
+
             for (let i = 0; i < f.points.length; i++) {
               pts.push({ time: f.points[i].time, bpm: f.points[i].bpm, type: f.points[i].type });
             }
+
+
+            for (let i = 0; i < f.tags.length; i++){
+              tags.push({time: f.tags[i].time, text: f.tags[i].text})       //写入tags
+            }
+
+
+
             this.engine.setCurvePoints(pts);
+            this.engine.setTagList(tags);
             this.hasCurve = true;
             console.info('[MainPlayer] 预设曲线「' + f.name + '」: ' + pts.length + ' 个点');
           }
@@ -332,6 +348,7 @@ struct MainPlayer {
     this.stopPipeline();
     this.cancelPending();
     this.native.stop();
+    this.voiceSpeaker.release();
   }
 
   @Builder
@@ -1646,6 +1663,7 @@ struct MainPlayer {
     this.showCurvePreview = (s.mode === MODE_CURVE);     // 曲线则在同一位置给「下一节拍点」预告
     if (this.showCurvePreview) {
       this.refreshCurvePreview(s.workoutSec);
+      this.refreshTag(s.workoutSec);
     }
     this.playingC = s.playing;
 
@@ -1706,6 +1724,28 @@ struct MainPlayer {
     this.cvNextInSec = st[nx].atSec - workoutSec;
     this.cvProg = p;
   }
+
+  private refreshTag(workoutSec: number): void {
+    const tags: TagPoint[] = this.engine.getTag();
+    if(tags.length === 0){
+      return;
+    }
+    let nx: number = -1;
+    for(let i : number = 0; i < tags.length; i ++){
+      if(tags[i].time > workoutSec + 0.001){
+        nx = i;
+        break;
+      }
+    }
+    if(nx < 0){
+      return;
+    }
+    const tagText: string = (nx > 0) ? tags[nx].text : "";
+    if(tagText){
+      this.voiceSpeaker.speakText(tagText);
+    }
+  }
+
 
   /** 预告栏的倒计时文案：10 秒内给到 0.1s，久了就只报整秒 */
   private etaText(sec: number): string {
