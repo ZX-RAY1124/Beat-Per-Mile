@@ -10,22 +10,24 @@ import {changeSpeed,
   SongMeta,
   music_cancel, music_pause, music_play, music_resume } from 'libentry.so';
 import { fileIo } from '@kit.CoreFileKit';
-
-
+import { TtsManager } from '../ets_libs/TtsManager';
 
 
 @Component
 struct audio_test {
   @State navPathStack: NavPathStack = new NavPathStack();
+  @State tts_manager: TtsManager = new TtsManager();
   player:number|undefined = undefined;
   speed:number = 1.0;
 
   aboutToAppear(): void {
     initArguments(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    this.tts_manager.initEngine();
     init();
   }
 
   aboutToDisappear(): void {
+    this.tts_manager.release();
     release(this.getUIContext().getHostContext() as common.UIAbilityContext);
   }
 
@@ -67,6 +69,10 @@ struct audio_test {
           Button("减速x0.2").width(120).height(30).onClick(() => {
             this.speed -= 0.2
             changeSpeed(this.speed);
+          });
+
+          Button("测试播放声音").width(120).height(30).onClick(() => {
+            this.tts_manager.speakText("你好世界")
           });
         }.justifyContent(FlexAlign.Center).offset({y : 200});
 

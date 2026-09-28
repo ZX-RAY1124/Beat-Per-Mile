@@ -320,7 +320,7 @@ struct MainPlayer {
 
 
             for (let i = 0; i < f.tags.length; i++){
-              tags.push({time: f.tags[i].time, text: f.tags[i].text})       //写入tags
+              tags.push({time: f.tags[i].time, text: f.tags[i].text, alreadyPlay:tags[i].alreadyPlay})       //写入tags
             }
 
 
@@ -1727,23 +1727,26 @@ struct MainPlayer {
 
   private refreshTag(workoutSec: number): void {
     const tags: TagPoint[] = this.engine.getTag();
+
     if(tags.length === 0){
       return;
     }
     let nx: number = -1;
     for(let i : number = 0; i < tags.length; i ++){
-      if(tags[i].time > workoutSec + 0.001){
+      if(tags[i].time <= workoutSec && !tags[i].alreadyPlay){
         nx = i;
-        break;
       }
+    }
+    const tagText: string = (nx >= 0) ? tags[nx].text : "";
+    if(tagText){
+      this.voiceSpeaker.speakText(tagText);
+      tags[nx].alreadyPlay = true;
+      return;
     }
     if(nx < 0){
       return;
     }
-    const tagText: string = (nx > 0) ? tags[nx].text : "";
-    if(tagText){
-      this.voiceSpeaker.speakText(tagText);
-    }
+
   }
 
 

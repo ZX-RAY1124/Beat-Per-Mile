@@ -93,7 +93,6 @@ interface SongDataRaw {
   filedir?: string;
   segments?: SongSegment[];
 }
-
 /** 曲库里的一个条目。key 是它在 json 里的键（约定用文件名） */
 export interface SongEntry {
   key: string;
@@ -161,6 +160,7 @@ export interface TempoPoint {
 export interface TagPoint {
   time: number;
   text: string;
+  alreadyPlay: boolean;
 }
 
 
@@ -507,6 +507,7 @@ export class RunDemoEngine {
       ts.push({
         time: tags[i].time,
         text: tags[i].text,
+        alreadyPlay: tags[i].alreadyPlay
       })
     }
 
