@@ -23,7 +23,8 @@ import {
   resolvePlaylistEntries,
   setCurrentSongKey,
   songFilePath,
-  TempoPoint
+  TempoPoint,
+  TagPoint
 } from '../ets_libs/RunDemoEngine';
 import { ACTIVE_CURVE_KEY, CurveFile, loadAll as curveLoadAll } from '../ets_libs/CurveStore';
 import {
@@ -305,11 +306,23 @@ struct MainPlayer {
         if (ci - 1 < curves.length) {
           const f: CurveFile = curves[ci - 1];
           if (f.points.length >= 2) {
+
             const pts: TempoPoint[] = [];
+            const tags: TagPoint[] = [];
+
             for (let i = 0; i < f.points.length; i++) {
               pts.push({ time: f.points[i].time, bpm: f.points[i].bpm, type: f.points[i].type });
             }
+
+
+            for (let i = 0; i < f.tags.length; i++){
+              tags.push({time: f.tags[i].time, text: f.tags[i].text})       //写入tags
+            }
+
+
+
             this.engine.setCurvePoints(pts);
+            this.engine.setTagList(tags);
             this.hasCurve = true;
             console.info('[MainPlayer] 预设曲线「' + f.name + '」: ' + pts.length + ' 个点');
           }
@@ -1641,6 +1654,7 @@ struct MainPlayer {
     this.showCurvePreview = (s.mode === MODE_CURVE);     // 曲线则在同一位置给「下一节拍点」预告
     if (this.showCurvePreview) {
       this.refreshCurvePreview(s.workoutSec);
+      this.refreshTag(s.workoutSec);
     }
     this.playingC = s.playing;
 
@@ -1701,6 +1715,29 @@ struct MainPlayer {
     this.cvNextInSec = st[nx].atSec - workoutSec;
     this.cvProg = p;
   }
+
+  private refreshTag(workoutSec: number): void {
+    const tags: TagPoint[] = this.engine.getTag();
+    if(tags.length === 0){
+      return;
+    }
+    let nx: number = -1;
+    for(let i : number = 0; i < tags.length; i ++){
+      if(tags[i].time > workoutSec + 0.001){
+        nx = i;
+        break;
+      }
+    }
+    if(nx < 0){
+      return;
+    }
+    const tagText: string = (nx > 0) ? tags[nx].text : "";
+    if(tagText){
+
+    }
+
+  }
+
 
   /** 预告栏的倒计时文案：10 秒内给到 0.1s，久了就只报整秒 */
   private etaText(sec: number): string {
