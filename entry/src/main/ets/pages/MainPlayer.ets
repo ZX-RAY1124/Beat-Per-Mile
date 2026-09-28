@@ -42,6 +42,7 @@ import {
 } from 'libentry.so';
 import { SOURCE_REAL, SOURCE_SIM, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
 import { stepSensor } from '../ets_libs/StepSensor';
+import { getStretchEngine } from '../ets_libs/StretchEngine';
 import { MainPlayerParam } from '../ets_libs/PlayerRouteParam';
 import motion from '@ohos.multimodalAwareness.motion';
 
@@ -1136,6 +1137,10 @@ struct MainPlayer {
     this.pullStatus();
     // 一按播放先冻住页面位置：原生解码/建缓冲期间不出声
     this.engine.setAudioReady(false);
+
+    // ★ 变速引擎：起播前把落盘的选择下发给 native。
+    //   0 = SignalSmith Stretch（默认）；1 = 系统 Audio Kit（OH_AudioRenderer_SetSpeed）。
+    this.native.setStretchEngine(getStretchEngine());
 
     if (this.songPath.length > 0 && this.native.preparePath(this.songPath)) {
       this.native.play();

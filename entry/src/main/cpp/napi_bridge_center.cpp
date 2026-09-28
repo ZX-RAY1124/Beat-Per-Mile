@@ -7,6 +7,7 @@
 #include "test_audio.h"
 #include <ohaudio/native_audiostream_base.h>
 #include <ohaudio/native_audiostreambuilder.h>
+#include <ohaudio/native_audiorenderer.h>   // OH_AudioRenderer_SetSpeed/GetSpeed（Audio Kit 变速）
 #include <thread>
 #include <condition_variable>
 #include "LiveStretchPlayer.h"
@@ -170,6 +171,28 @@ static int g_nextId = 1;
 // ★ 倍速改成**全局一个原子量**：任意时刻所有在响的流必须用同一个倍速
 //   （两首歌的墙钟拍周期必须相同），所以它天生是"全局共享"而不是"每会话私有"。
 static std::atomic<double> g_speed{1.0};
+
+// ★ 变速引擎选择（全局）：0 = SignalSmith Stretch（自研，默认），1 = 系统 Audio Kit
+//   （OH_AudioRenderer_SetSpeed）。由 setStretchEngineMode() 写入，播放循环每个周期读取，
+//   所以运行时切换最迟一个循环周期（~20ms）生效。
+//   ■ 两条路径的差别（配套改动见 LiveStretchPlayer::setProduceRate）：
+//       模式 0：LiveStretchPlayer 按 g_speed 变速，产线程保持 1× 实时；渲染器倍速固定 1.0。
+//       模式 1：LiveStretchPlayer 跑 speed=1.0（原速直通），产线程按 g_speed 倍速产出；
+//               真正的变速交给 OH_AudioRenderer_SetSpeed（系统内部是 Sonic）。
+//   ■ 为什么模式 1 必须让产线程跟着倍速跑：框架侧 renderer_in_client.cpp 的
+//     RendererInClientInner::ProcessSpeed 会把 app 写入的 buffer 经 ChangeSpeedFunc 变换后
+//     再送设备，于是**写回调的频率随倍速变化**（≈ 倍速 × 实时）。产线程不跟上的话，
+//     倍速 >1 会被读空（underrun 掉音）、<1 会把 6 秒环形缓冲灌满（播出陈旧音频、位置漂移）。
+static std::atomic<int>    g_stretchEngine{0};
+// Audio Kit 变速"是否真的生效"的证据：有些设备/构建没编 SONIC_ENABLE，
+// SetSpeed 可能返回成功但实际不变速 —— 用 GetSpeed 回读核对，供日志/页面判断。
+static std::atomic<bool>   g_akApplied{false};
+static std::atomic<double> g_akSpeed{1.0};
+static std::atomic<int>    g_akSetResult{0};
+static std::atomic<int>    g_akGetResult{0};
+// Pause/Flush/Start 之后系统侧的倍速状态可能被重置：musicSeek / musicResume 置位，
+// 播放循环下一轮无条件重下发一次 SetSpeed，避免出现"最多 1 秒用错倍速"。
+static std::atomic<bool>   g_akReapply{false};
 static std::atomic<long long> g_lastCallbackMs;       // 当前活动会话的最后一次回调时间
 bool g_isPlaybackFinished = false;
 
@@ -1187,8 +1210,61 @@ static void WorkerThread(TsfnContext *ctx, char filePath[]){
     LivePlayerReg liveReg(ctx);
 
     //播放器循环
+    // ★ 变速引擎二选一（见 setStretchEngineMode 的说明）。
+    //   appliedEngine / appliedAkSpeed / appliedAkMs 记录"已经下发过什么"：
+    //   OH_AudioRenderer_SetSpeed 是跨进程调用，比较贵，而倍速是几 Hz 级变化的，
+    //   所以只在倍速真的变了（>0.005）或满 1 秒时重下发一次。
+    int       appliedEngine  = -1;
+    double    appliedAkSpeed = -1.0;
+    long long appliedAkMs    = 0;
     while(!finished && !quit){
-        player.setSpeed(g_speed.load(std::memory_order_relaxed));
+        const double mult = g_speed.load(std::memory_order_relaxed);
+        if (g_stretchEngine.load(std::memory_order_relaxed) == 1) {
+            // ── 系统 Audio Kit 变速 ──
+            if (appliedEngine != 1) {
+                player.setSpeed(1.0);        // 引擎只做原速直通，变速交给系统
+                appliedEngine  = 1;
+                appliedAkSpeed = -1.0;       // 强制下面立刻下发一次
+            }
+            // 产线程按倍速跑：变速后渲染器会按倍速频率来取数据（见 setProduceRate 说明）
+            player.setProduceRate(mult);
+            const long long now = nowMs();
+            // ① 倍速变化 ② 每 1 秒兜底重下发（Pause/Start、seek 之后系统侧状态可能被重置）
+            const bool forceReapply = g_akReapply.exchange(false, std::memory_order_relaxed);
+            if (forceReapply || appliedAkSpeed < 0.0 || std::abs(mult - appliedAkSpeed) > 0.005
+                || (now - appliedAkMs) > 1000) {
+                float s = static_cast<float>(mult);
+                if (s < 0.25f) s = 0.25f;    // 系统范围 0.25 ~ 4.0
+                if (s > 4.0f)  s = 4.0f;
+                const OH_AudioStream_Result rs = OH_AudioRenderer_SetSpeed(ctx->renderer, s);
+                float got = 0.0f;
+                const OH_AudioStream_Result rg = OH_AudioRenderer_GetSpeed(ctx->renderer, &got);
+                g_akSpeed.store(static_cast<double>(s), std::memory_order_relaxed);
+                g_akSetResult.store(static_cast<int>(rs), std::memory_order_relaxed);
+                g_akGetResult.store(static_cast<int>(rg), std::memory_order_relaxed);
+                g_akApplied.store(rs == AUDIOSTREAM_SUCCESS && rg == AUDIOSTREAM_SUCCESS,
+                                  std::memory_order_relaxed);
+                if (rs != AUDIOSTREAM_SUCCESS || rg != AUDIOSTREAM_SUCCESS) {
+                    OH_LOG_ERROR(LOG_APP,
+                        "[stretch] SetSpeed(%{public}.3f) 失败: set=%{public}d get=%{public}d",
+                        s, static_cast<int>(rs), static_cast<int>(rg));
+                }
+                appliedAkSpeed = mult;
+                appliedAkMs    = now;
+            }
+        } else {
+            // ── 自研 SignalSmith 变速（默认）──
+            if (appliedEngine != 0) {
+                if (appliedEngine == 1) {
+                    // 从 Audio Kit 切回来：先把渲染器还原成原速，否则会"系统再变速一次"
+                    OH_AudioRenderer_SetSpeed(ctx->renderer, 1.0f);
+                }
+                player.setProduceRate(1.0);  // 产线程回到 1× 实时，变速由引擎完成
+                appliedEngine  = 0;
+                appliedAkSpeed = -1.0;
+            }
+            player.setSpeed(mult);
+        }
         if(ctx->cancelled.load()){
             quit = true;
             OH_AudioRenderer_Stop(ctx->renderer);
@@ -1337,6 +1413,8 @@ static napi_value musicResume(napi_env env, napi_callback_info info) {
     withRendererLocked(id, [](OH_AudioRenderer* r) {
         OH_AudioRenderer_Start(r);
     });
+    // ★ Pause/Start 后系统侧倍速可能被重置：播放循环下一轮重下发一次
+    g_akReapply.store(true, std::memory_order_relaxed);
     
     return nullptr;
 }
@@ -1394,6 +1472,8 @@ static napi_value musicSeek(napi_env env, napi_callback_info info) {
         }
         OH_AudioRenderer_Start(r);          // 重新开始消费
     });
+    // ★ Flush/Start 后系统侧倍速可能被重置：让播放循环下一轮重下发一次
+    g_akReapply.store(true, std::memory_order_relaxed);
 
     OH_LOG_INFO(LOG_APP, "[play] seek -> %{public}.3fs (frame=%{public}lld) %{public}s",
                 sec, frame, ok ? "OK" : "FAILED");
@@ -1891,6 +1971,54 @@ static napi_value stepSensorStop(napi_env env, napi_callback_info info) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+//  setStretchEngineMode(mode) —— 选择变速引擎（全局）
+//    0 = SignalSmith Stretch（自研，默认）：LiveStretchPlayer 按 g_speed 变速，
+//        产线程保持 1× 实时；渲染器倍速固定 1.0。
+//    1 = 系统 Audio Kit：LiveStretchPlayer 跑 speed=1.0（原速直通），产线程按 g_speed
+//        倍速产出；真正的变速交给 OH_AudioRenderer_SetSpeed（内部是 Sonic，锁音高）。
+//    ★ 两条路径的"输入消耗速率"必须一致：变速后渲染器写回调按倍速频率来取数据，
+//      所以模式 1 里产线程也必须按倍速跑 —— 否则 r>1 掉音、r<1 位置漂移。
+//    ★ 范围：系统只接受 0.25~4.0，而本项目倍速本来就夹在 [0.5, 2.0]，天然在范围内。
+// ════════════════════════════════════════════════════════════════════════
+static napi_value setStretchEngineMode(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int32_t mode = 0;
+    if (argc >= 1 && args[0] != nullptr) {
+        napi_get_value_int32(env, args[0], &mode);
+    }
+    mode = (mode == 1) ? 1 : 0;
+    g_stretchEngine.store(mode, std::memory_order_relaxed);
+    OH_LOG_INFO(LOG_APP, "[stretch] engine -> %{public}s",
+                mode == 1 ? "Audio Kit (OH_AudioRenderer_SetSpeed)"
+                          : "SignalSmith Stretch");
+    return nullptr;
+}
+
+/**
+ * getStretchEngineStatus() —— 返回 JSON，供日志/页面核对 Audio Kit 是否真的接管了变速：
+ *   {mode, applied, speed, setResult, getResult}
+ *   applied = SetSpeed 与 GetSpeed 都成功（0 = AUDIOSTREAM_SUCCESS）时才算 true。
+ *   ⚠️ 若 applied 恒为 false，多半是设备/构建没编 SONIC_ENABLE，系统变速静默失效 ——
+ *      此时应切回 SignalSmith（页面把开关拨回即可）。
+ */
+static napi_value getStretchEngineStatus(napi_env env, napi_callback_info info) {
+    (void)info;
+    std::ostringstream os;
+    os << "{\"mode\":" << g_stretchEngine.load(std::memory_order_relaxed)
+       << ",\"applied\":" << (g_akApplied.load(std::memory_order_relaxed) ? "true" : "false")
+       << ",\"speed\":" << g_akSpeed.load(std::memory_order_relaxed)
+       << ",\"setResult\":" << g_akSetResult.load(std::memory_order_relaxed)
+       << ",\"getResult\":" << g_akGetResult.load(std::memory_order_relaxed)
+       << "}";
+    const std::string s = os.str();
+    napi_value out = nullptr;
+    napi_create_string_utf8(env, s.c_str(), s.size(), &out);
+    return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════
 //  musicGetStatus(id) —— 原生播放状态查询
 //    返回 JSON 字符串：
 //      {"ok":bool,"state":"idle|loading|ready|failed|gone",
@@ -2059,7 +2187,10 @@ static napi_value Init(napi_env env, napi_value exports)
         {"stepSensorPush", nullptr, stepSensorPush, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"stepSensorStop", nullptr, stepSensorStop, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ★ 原生播放状态：加载中/就绪/失败 + 真实歌曲位置
-        {"musicGetStatus", nullptr, musicGetStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
+        {"musicGetStatus", nullptr, musicGetStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // ★ 变速引擎选择（默认 SignalSmith；切到 Audio Kit 走 OH_AudioRenderer_SetSpeed）
+        {"setStretchEngineMode", nullptr, setStretchEngineMode, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getStretchEngineStatus", nullptr, getStretchEngineStatus, nullptr, nullptr, nullptr, napi_default, nullptr}
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

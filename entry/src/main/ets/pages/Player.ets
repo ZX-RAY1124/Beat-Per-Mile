@@ -33,6 +33,7 @@ import {
 } from 'libentry.so';
 import { SOURCE_REAL, SOURCE_SIM, STEP_SCENARIOS, getChaseDelaySec, getStepScenario, getStepSource } from '../ets_libs/StepSource';
 import { stepSensor } from '../ets_libs/StepSensor';
+import { getStretchEngine } from '../ets_libs/StretchEngine';
 
 /**
  * 跑步电台 · 播放器页（可演示版）
@@ -1578,6 +1579,10 @@ struct Player {
     // 一按播放就先把位置冻住：原生在"解码+建缓冲"期间不会出声，
     // 等 status 报到 ready 才解冻并用真实位置回填（否则这几秒会空走）。
     this.engine.setAudioReady(false);
+
+    // ★ 变速引擎：起播前把落盘的选择下发给 native。
+    //   0 = SignalSmith Stretch（默认）；1 = 系统 Audio Kit（OH_AudioRenderer_SetSpeed）。
+    this.native.setStretchEngine(getStretchEngine());
 
     // ★ 优先播 Media 里的真实歌曲（song_data.json 指的那个）；
     //   没有 song_data.json 时才退回内置演示音源，否则会出现

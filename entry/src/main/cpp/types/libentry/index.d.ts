@@ -121,3 +121,18 @@ export const stepSensorStop: () => void;
  *       ③ 用 posSec 回填真实播放位置，修正页面自积分造成的拍相位漂移。
  */
 export const musicGetStatus: (id: number) => string;
+/**
+ * 选择变速引擎（全局，默认 0）。
+ *   0 = SignalSmith Stretch（自研）：LiveStretchPlayer 按倍速变速，渲染器倍速固定 1.0。
+ *   1 = 系统 Audio Kit：引擎跑原速直通，变速交给 OH_AudioRenderer_SetSpeed
+ *       （系统内部是 Sonic，锁音高；范围 0.25~4.0）。
+ * ★ 起播前调用即可；运行中调用最迟一个播放循环周期（~20ms）生效。
+ * ⚠️ 切换会改变产线程的产出速率，运行中切换可能有一小段过渡（环形缓冲里的旧数据）。
+ */
+export const setStretchEngineMode: (mode: number) => void;
+/**
+ * 查询 Audio Kit 变速是否真的生效，返回 JSON 字符串：
+ *   {"mode":0|1,"applied":boolean,"speed":number,"setResult":number,"getResult":number}
+ * applied=false 且 mode=1 ⇒ 设备/构建未启用系统变速（可能没编 SONIC_ENABLE），请切回 SignalSmith。
+ */
+export const getStretchEngineStatus: () => string;

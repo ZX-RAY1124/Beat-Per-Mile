@@ -14,7 +14,7 @@
  */
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { changeSpeed, music_cancel, music_pause, music_play, music_prepare, music_resume, music_seek, music_set_volume, music_start, musicGetStatus } from 'libentry.so';
+import { changeSpeed, music_cancel, music_pause, music_play, music_prepare, music_resume, music_seek, music_set_volume, music_start, musicGetStatus, setStretchEngineMode } from 'libentry.so';
 
 /**
  * 接歌硬切的两段时间（毫秒）—— 都需要在真机上量，这里给一组保守的起步值。
@@ -284,6 +284,19 @@ export class NativeAudio {
       changeSpeed(s);
     } catch (e) {
       console.error('NativeAudio.setSpeed 失败：' + JSON.stringify(e));
+    }
+  }
+
+  /**
+   * 选择变速引擎（全局，起播前调用即可）：
+   *   0 = SignalSmith Stretch（自研，默认）；1 = 系统 Audio Kit（OH_AudioRenderer_SetSpeed）。
+   * native 侧播放循环每个周期读它，所以运行中调用也会生效（最迟 ~20ms）。
+   */
+  setStretchEngine(mode: number): void {
+    try {
+      setStretchEngineMode(mode);
+    } catch (e) {
+      console.error('NativeAudio.setStretchEngine 失败：' + JSON.stringify(e));
     }
   }
 

@@ -14,8 +14,9 @@ import {
   setStepScenario,
   setStepSource
 } from '../ets_libs/StepSource';
+import { getStretchEngine, setStretchEngine } from '../ets_libs/StretchEngine';
 import { SensorDebug, stepSensor } from '../ets_libs/StepSensor';
-import { stepSensorStart, stepSensorStop } from 'libentry.so';
+import { setStretchEngineMode, stepSensorStart, stepSensorStop } from 'libentry.so';
 
 /**
  * 算法参数设置页（设置页 →「算法参数设置」进来）
@@ -56,7 +57,7 @@ const ICON_BG_ORANGE: string = '#FFF3E9';
  * 以后加算法只要往这里加名字，药丸位置是按下标算的，不用改布局。
  */
 const ENGINE_LABELS: string[] = ['SignalSmith Stretch', '系统Audio Kit'];
-/** 默认选中项（还没有落盘，以后从 preferences 读） */
+/** 默认选中项：自研 SignalSmith Stretch（仅当磁盘上没存过时的兜底；实际值见 getStretchEngine()） */
 const ENGINE_DEFAULT: number = 0;
 
 /** 步数检测源的分段标签（顺序对应 StepSource 的 SOURCE_REAL / SOURCE_SIM） */
@@ -120,6 +121,7 @@ struct AlgorithmSettings {
   @State dbgTick: number = 0;
 
   aboutToAppear(): void {
+    this.engineIndex = getStretchEngine();   // 变速引擎：从落盘值恢复
     this.stepSource = getStepSource();
     this.stepScenario = getStepScenario();
     this.chaseDelaySec = getChaseDelaySec();
@@ -438,6 +440,14 @@ struct AlgorithmSettings {
     this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseInOut }, () => {
       this.engineIndex = index;
     });
+    // 落盘 + 立刻下发 native：播放循环每个周期读它，所以正在播时最迟 ~20ms 生效。
+    // 下次起播时播放器页还会再下发一次（见 Player/MainPlayer 的 startNative），双保险。
+    setStretchEngine(index);
+    try {
+      setStretchEngineMode(getStretchEngine());
+    } catch (e) {
+      console.error('下发变速引擎失败：' + JSON.stringify(e));
+    }
   }
 
   // ==================== 两条小行：详细参数 ====================

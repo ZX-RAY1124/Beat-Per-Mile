@@ -247,6 +247,23 @@ public:
     }
 
     /**
+     * @brief 设置「生产速率倍率」r：后台线程每秒产出 r 倍实时长度的音频。
+     *
+     * ★ 专门给「系统 Audio Kit 变速」用（见 napi_bridge_center.cpp 的 g_stretchEngine）：
+     *   那种模式下本引擎跑 speed=1.0（原速直通），变速交给 OH_AudioRenderer_SetSpeed，
+     *   而渲染器的写回调会**按倍速 r 的频率**来取数据 —— 所以这里也必须按 r 产出，
+     *   否则 r>1 会被读空（underrun 掉音）、r<1 会把环形缓冲灌满（播出陈旧音频、位置漂移）。
+     *   r=1.0 即原来的实时行为（SignalSmith 模式一直用 1.0）。
+     *
+     * @note 任意线程可调用；每个音频块读一次，实时生效。
+     */
+    void setProduceRate(double r) {
+        if (!(r > 0.05)) r = 0.05;
+        if (r > 8.0) r = 8.0;
+        produceRate_.store(r, std::memory_order_relaxed);
+    }
+
+    /**
      * @brief 后台音频线程是否还在跑。
      *
      * audioLoop 在 process() 返回 0（数据耗尽）时会自行把 running_ 置 false 并退出。
@@ -338,6 +355,11 @@ private:
         auto nextWake = std::chrono::steady_clock::now();
 
         while (running_) {
+            // ★ 每个音频块读一次生产速率：Audio Kit 变速模式下按倍速产出（见 setProduceRate）。
+            //   定时基准仍是 intervalMs_（= blockSize/sampleRate），只是按 r 缩放。
+            const long long stepUs = static_cast<long long>(
+                intervalMs_ * 1000.0 / produceRate_.load(std::memory_order_relaxed));
+
             // ---- 暂停状态：输出静音，不消耗引擎数据 ----
             // 注意：静音也按实时节拍输出（与正常处理同频），保证：
             //   1. 下游（混音器/声卡）在暂停期间获得实时的静音流，不饿不溢；
@@ -350,9 +372,7 @@ private:
                     // 产生静音数据（每实例独立缓冲，多播放器并发/不同块大小均安全）
                     audioCallback_(silenceBuf_.data(), blockSize_, channels_);
                 }
-                nextWake += std::chrono::microseconds(
-                    static_cast<long long>(intervalMs_ * 1000)
-                );
+                nextWake += std::chrono::microseconds(stepUs);
                 std::this_thread::sleep_until(nextWake);
                 continue;
             }
@@ -382,9 +402,7 @@ private:
             }
 
             // ---- 精准定时，保持固定的时间间隔 ----
-            nextWake += std::chrono::microseconds(
-                static_cast<long long>(intervalMs_ * 1000)
-            );
+            nextWake += std::chrono::microseconds(stepUs);
             std::this_thread::sleep_until(nextWake);
         }
     }
@@ -402,6 +420,7 @@ private:
     std::atomic<bool> paused_;              ///< 是否暂停
     std::atomic<bool> silenceOnPause_{true}; ///< 暂停时是否仍输出静音块（默认 true 保持兼容）
     std::atomic<bool> finished_{false};      ///< 数据是否真的放完了（只有 process()==0 才置位）
+    std::atomic<double> produceRate_{1.0};   ///< 生产速率倍率（Audio Kit 变速模式用；见 setProduceRate）
     std::thread workThread_;                ///< 后台工作线程
 
     std::function<void(const float* data, int frames, int channels)> audioCallback_; ///< 数据回调
