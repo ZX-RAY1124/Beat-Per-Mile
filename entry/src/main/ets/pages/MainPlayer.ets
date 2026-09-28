@@ -45,6 +45,7 @@ import { SOURCE_REAL, SOURCE_SIM, getChaseDelaySec, getStepScenario, getStepSour
 import { stepSensor } from '../ets_libs/StepSensor';
 import { MainPlayerParam } from '../ets_libs/PlayerRouteParam';
 import motion from '@ohos.multimodalAwareness.motion';
+import { TtsManager } from '../ets_libs/TtsManager';
 
 /**
  * MainPlayer.ets —— 正式播放器
@@ -158,6 +159,7 @@ struct MainPlayer {
   private pollCounter: number = 0;
   private statusAccum: number = 0;
   private lastStatusSpeed: number = 1;
+  private voiceSpeaker: TtsManager = new TtsManager();     //播放声音的
 
   // ==================== 展示数据（@State 才刷新 UI） ====================
   @State BPM_now : number = 0;              //当前BPM（目标步频）
@@ -269,6 +271,7 @@ struct MainPlayer {
     this.G_token = true;      // 重进页面时重新激活轮询令牌
     this.stop_token = '';
     this.constBpmUi = this.engine.getConstBpm();   // 恒速滑块初值 = 引擎规定步频
+    this.voiceSpeaker.initEngine();      //初始化说话引擎
 
     try {
       window.getLastWindow(this.getUIContext().getHostContext())        //获取窗口大小
@@ -344,6 +347,7 @@ struct MainPlayer {
     this.stopPipeline();
     this.cancelPending();
     this.native.stop();
+    this.voiceSpeaker.release();
   }
 
   @Builder
@@ -1733,9 +1737,8 @@ struct MainPlayer {
     }
     const tagText: string = (nx > 0) ? tags[nx].text : "";
     if(tagText){
-
+      this.voiceSpeaker.speakText(tagText);
     }
-
   }
 
 
