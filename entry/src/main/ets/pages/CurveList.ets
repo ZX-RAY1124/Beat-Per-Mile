@@ -218,8 +218,10 @@ struct CurveCard {
   @Prop selected: boolean = false;
   // 回调
   onSelect: () => void = () => {
+
   };
   onSettings: () => void = () => {
+
   };
   onTags: () => void = () => {
 
