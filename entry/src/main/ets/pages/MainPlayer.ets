@@ -271,6 +271,7 @@ struct MainPlayer {
     this.ctx = c;
     this.G_token = true;      // 重进页面时重新激活轮询令牌
     this.stop_token = '';
+    this.engine.setConstBpm(160);
     this.constBpmUi = this.engine.getConstBpm();   // 恒速滑块初值 = 引擎规定步频
     this.voiceSpeaker.initEngine();      //初始化说话引擎
 
@@ -793,7 +794,7 @@ struct MainPlayer {
           }
           .linearGradient({
             angle: 0,
-            colors: [['#ffee3939', 0.0], ['#ffee3939', 0.5],['#A78BFA', 0.5],['#A78BFA', 1.0]]
+            colors: [['#ffee3939', 0.0], ['#ffee3939', 0.5],[this.G_COLOR, 0.5],[this.G_COLOR, 1.0]]
           })
           .clipShape(new EllipseShape({ width: '100%', height: '100%' }))
           .height(240)
@@ -862,6 +863,9 @@ struct MainPlayer {
       }
       // 模式由入口决定：红圆 = 动态；绿圆 = 预设（有曲线走曲线，否则恒速）
       this.applyEntryMode(requested);
+      if(requested === MODE_CONSTANT){
+
+      }
       this.outCircle.select();
 
       // 进入即播：两个入口进来都直接开始运动

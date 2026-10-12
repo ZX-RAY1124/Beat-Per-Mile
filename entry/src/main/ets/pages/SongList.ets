@@ -683,7 +683,6 @@ export struct SongList {
         .padding({ bottom: 24 })
     }
     .width('80%')
-    .backgroundColor('#FFFFFF')
     .borderRadius(16)
   }
 

@@ -423,7 +423,7 @@ struct Main {
                       this.Button_2.unselect();
                     }
                     // 红圆 = 动态模式
-                    const param: MainPlayerParam = { mode: MODE_DYNAMIC, width: this.windowWidth };
+                    const param: MainPlayerParam = { mode: MODE_DYNAMIC, width: this.windowWidth, constBPM: 160};
                     this.navPathStack.pushPathByName("Main_Play_Page", param, () => {
                       this.Button_1.unselect();
                     }, true);
@@ -480,8 +480,8 @@ struct Main {
                       this.Button_1.unselect();
                     }
 
-                    // 绿圆 = 预设模式；MainPlayer 内部再决定走曲线还是恒速
-                    const param: MainPlayerParam = { mode: MODE_CONSTANT, width: this.windowWidth };
+                    // 绿圆 = 固定模式；MainPlayer 内部再决定走曲线还是恒速
+                    const param: MainPlayerParam = { mode: MODE_CONSTANT, width: this.windowWidth, constBPM: 160 };
                     this.navPathStack.pushPathByName("Main_Play_Page", param, () => {
                       this.Button_2.unselect();
                     }, true);

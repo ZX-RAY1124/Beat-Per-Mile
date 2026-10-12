@@ -10,4 +10,5 @@ export interface MainPlayerParam {
   mode: number;
   /** 窗口宽度：MainPlayer 里圆的定位要用 */
   width: number;
+  constBPM: number;
 }
